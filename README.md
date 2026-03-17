@@ -2,47 +2,26 @@
 
 Subbiblioteca extraida da `Baratinha` com foco exclusivo em OTA para ESP32.
 
-`SuperOTA` remove tudo que nao e necessario para atualizacao remota de firmware (motores, ToF, LEDs, botoes, telemetria e portal web) e mantem apenas o nucleo de conectividade/OTA.
+## O que essa versao adiciona
 
-## Objetivo
+- Exemplo e fluxo de inicializacao AP-only.
+- Lista de redes station (ate `kMaxStationNetworks`) com scan inteligente.
+- Portal web de configuracao para editar:
+  - hostname;
+  - preferencia de inicializacao (STA/AP);
+  - credenciais AP;
+  - lista de redes station.
+- Entrada no portal por comando serial (default: `configota`).
 
-Fornecer uma biblioteca simples e reutilizavel para:
+## Visao geral
 
-- conectar em WiFi no modo `station`;
-- cair automaticamente para `access point` quando necessario;
-- habilitar `ArduinoOTA`;
-- anunciar via mDNS (`hostname.local`);
-- salvar/carregar configuracao basica na NVS (`Preferences`).
+`SuperOTA` oferece:
 
-## Compatibilidade P4 + C6 (modo seguro)
-
-O `SuperOTA` agora detecta build para `ESP32-P4` e ativa automaticamente um tratamento de rede mais conservador:
-
-- retries extras ao subir `station` e `access point`;
-- pequeno tempo de estabilizacao apos associacao WiFi;
-- fallback sem interromper OTA caso mDNS falhe.
-
-Importante:
-
-- em targets nao-P4, esse modo nao muda o fluxo padrao;
-- voce pode ligar/desligar manualmente com `setSafeP4Mode(...)`.
-
-## O que foi extraido da Baratinha
-
-Componentes aproveitados do fluxo OTA original:
-
-- estrategia de tentativa `station -> AP` (ou inversa, configuravel);
-- inicializacao de `ArduinoOTA` com callbacks de log;
-- suporte a hostname e mDNS;
-- persistencia de SSID/senha/hostname/modo preferido.
-
-Componentes propositalmente removidos por nao serem essenciais ao OTA:
-
-- sensores e controle de motores;
-- animacoes em LEDs;
-- botao de recovery fisico;
-- Telnet e telemetria;
-- portal web de configuracao.
+- OTA via `ArduinoOTA`;
+- fallback STA/AP;
+- mDNS (`hostname.local`);
+- persistencia NVS (`Preferences`);
+- modo seguro automatico para target ESP32-P4.
 
 ## Estrutura
 
@@ -56,80 +35,85 @@ SuperOTA/
   examples/
     BasicStationOrAP/
       BasicStationOrAP.ino
+    BasicAccessPointOnly/
+      BasicAccessPointOnly.ino
+    StationListWithSerialConfig/
+      StationListWithSerialConfig.ino
 ```
 
 ## Requisitos
 
-- Placa ESP32
+- ESP32
 - Core Arduino para ESP32
-- Bibliotecas do core:
-  - `WiFi`
-  - `ArduinoOTA`
-  - `ESPmDNS`
-  - `Preferences`
+- Bibliotecas do core: `WiFi`, `ArduinoOTA`, `ESPmDNS`, `Preferences`, `WebServer`, `DNSServer`
 
-## Instalacao
+## Fluxo inteligente de station
 
-1. Copie a pasta `SuperOTA` para sua pasta de bibliotecas Arduino.
-2. Reinicie a IDE (Arduino IDE/PlatformIO, se aplicavel).
-3. Inclua no sketch:
+Quando existem redes station cadastradas:
 
-```cpp
-#include <SuperOTA.h>
-```
+1. `SuperOTA` escaneia redes visiveis com `WiFi.scanNetworks()`.
+2. Procura a primeira rede encontrada respeitando sua ordem de prioridade na lista.
+3. Conecta apenas em uma rede detectada no scan.
+4. Se nao encontrar nenhuma, faz fallback para AP (dependendo da configuracao).
 
-## Uso rapido
+Toda a decisao e impressa via `Serial`.
 
-```cpp
-#include <SuperOTA.h>
+## Portal de configuracao
 
-SuperOTA ota;
+Com serial habilitado, digite no monitor serial:
 
-void setup() {
-  ota.beginSerial(115200);
+- `configota` -> inicia fluxo de abertura do portal
+- se estiver em station conectado, a biblioteca pergunta:
+  - `1` = abrir portal em station (`http://hostname.local`)
+  - `2` = abrir portal em AP (captive portal)
+- `config-stop` -> encerra portal e retoma configuracao OTA
+- `config-help` -> mostra comandos
 
-  ota.setStationCredentials("MinhaRede", "MinhaSenha");
-  ota.setAccessPointCredentials("SuperOTA-Recovery", "12345678");
-  ota.setHostname("superota-no1");
-  ota.setPreferAccessPoint(false); // tenta station antes de AP
-  // Opcional: no ESP32-P4 ja vem true por padrao.
-  // ota.setSafeP4Mode(true);
+Quando aberto em station, a pagina fica disponivel em:
 
-  ota.begin();
-}
+- `http://hostname.local`
+- `http://<ip_station>`
+- porta HTTP: `80`
 
-void loop() {
-  ota.loop(); // obrigatorio para OTA funcionar
-}
-```
+Quando aberto em AP, a biblioteca sobe um AP de setup com captive portal (DNS catch-all) para abrir a pagina automaticamente apos conectar.
 
-## Exemplo com persistencia
+Sobre serial:
 
-```cpp
-#include <SuperOTA.h>
+- comandos (`configota`, `1`, `2`, etc.) podem ser enviados por:
+  - USB/COM no monitor serial, ou
+  - Telnet em `socket://hostname.local:23`
 
-SuperOTA ota;
+Mapa rapido de portas:
 
-void setup() {
-  ota.beginSerial(115200);
+- Portal web de configuracao: `http://hostname.local:80` (ou IP:80)
+- OTA (upload de firmware): porta `3232` (ArduinoOTA / espota)
+- Serial sem fio (Telnet): porta `23`
+- Serial USB local: COMx
 
-  ota.loadPreferences();
+No portal voce consegue editar:
 
-  if (!ota.hasStationCredentials()) {
-    ota.setStationCredentials("MinhaRede", "MinhaSenha");
-    ota.setAccessPointCredentials("SuperOTA-Recovery", "12345678");
-    ota.setHostname("superota-no1");
-    ota.setPreferAccessPoint(false);
-    ota.savePreferences();
-  }
+- hostname
+- preferencia de inicializacao (priorizar AP)
+- AP SSID/senha
+- lista station (uma por linha em `SSID;senha`)
 
-  ota.begin();
-}
+Tambem existe endpoint de scan:
 
-void loop() {
-  ota.loop();
-}
-```
+- `GET /scan` -> lista redes detectadas (SSID, RSSI, canal)
+
+## Exemplos
+
+### 1) AP-only
+
+Use [examples/BasicAccessPointOnly/BasicAccessPointOnly.ino](examples/BasicAccessPointOnly/BasicAccessPointOnly.ino)
+
+### 2) Station + AP fallback
+
+Use [examples/BasicStationOrAP/BasicStationOrAP.ino](examples/BasicStationOrAP/BasicStationOrAP.ino)
+
+### 3) Lista station + portal serial
+
+Use [examples/StationListWithSerialConfig/StationListWithSerialConfig.ino](examples/StationListWithSerialConfig/StationListWithSerialConfig.ino)
 
 ## API publica
 
@@ -137,6 +121,9 @@ void loop() {
 
 - `void beginSerial(uint32_t baud = 115200)`
 - `void setStationCredentials(const char* ssid, const char* password = nullptr)`
+- `bool addStationNetwork(const char* ssid, const char* password = nullptr)`
+- `void clearStationNetworks()`
+- `uint8_t stationNetworkCount() const`
 - `void setAccessPointCredentials(const char* ssid, const char* password = nullptr)`
 - `void setHostname(const char* hostname)`
 - `void setPreferAccessPoint(bool prefer)`
@@ -145,16 +132,23 @@ void loop() {
 - `bool safeP4Mode() const`
 - `bool isP4Target() const`
 
+### Portal / serial
+
+- `void enableTelnetSerial(bool enable, uint16_t port = 23)`
+- `bool telnetSerialEnabled() const`
+- `uint16_t telnetPort() const`
+- `bool telnetClientConnected() const`
+- `void enableSerialConfigCommand(bool enable = true, const char* command = "configota")`
+- `bool startConfigPortal(const char* apSsid = nullptr, const char* apPassword = nullptr)`
+- `void stopConfigPortal(bool resumeAuto = true)`
+- `bool configPortalRunning() const`
+
 ### Inicializacao OTA
 
 - `bool begin()`
-  - Inicializa usando o fluxo automatico com fallback.
 - `bool beginStation(const char* ssid, const char* password = nullptr)`
-  - Forca inicializacao direta em `WIFI_STA`.
 - `bool beginAccessPoint(const char* ssid = nullptr, const char* password = nullptr)`
-  - Forca inicializacao direta em `WIFI_AP`.
 - `void loop()`
-  - Deve ser chamado continuamente para processar `ArduinoOTA.handle()`.
 
 ### Estado
 
@@ -171,63 +165,33 @@ void loop() {
 - `bool savePreferences()`
 - `bool clearPreferences()`
 
-Namespace NVS usado: `superota`
+Namespace NVS: `superota`
 
-Chaves usadas:
+Chaves:
 
 - `preferAP`
-- `staSsid`
-- `staPass`
+- `staSsid` / `staPass` (compatibilidade)
+- `staList` (lista station)
 - `apSsid`
 - `apPass`
 - `hostname`
 
-## Fluxo de decisao (`begin`)
+## Modo seguro P4 + C6
 
-- Se `preferAccessPoint == false`:
-  1. Tenta `station` (se houver SSID).
-  2. Se falhar, sobe em `access point`.
-- Se `preferAccessPoint == true`:
-  1. Sobe em `access point`.
-  2. Se falhar e houver SSID de station, tenta `station`.
+No build ESP32-P4, o modo seguro e ligado por padrao:
 
-## Migracao a partir de Baratinha
+- retries extras em STA/AP;
+- atraso curto para estabilizacao de link;
+- mDNS nao bloqueia o OTA em caso de falha.
 
-Mapeamento principal:
-
-- `Baratinha::setupOTAStation(...)` -> `SuperOTA::beginStation(...)`
-- `Baratinha::setupOTAAccessPoint(...)` -> `SuperOTA::beginAccessPoint(...)`
-- `Baratinha::enableOTA(...)` -> `SuperOTA::enable(...)`
-- `Baratinha::setStationCredentials(...)` -> `SuperOTA::setStationCredentials(...)`
-- `Baratinha::setAccessPointCredentials(...)` -> `SuperOTA::setAccessPointCredentials(...)`
-- `Baratinha::setPreferAccessPoint(...)` -> `SuperOTA::setPreferAccessPoint(...)`
-- `Baratinha::setHostname(...)` -> `SuperOTA::setHostname(...)`
-- `Baratinha::processOTA()` -> `SuperOTA::loop()`
+Em outros targets, esse modo nao altera o comportamento padrao.
 
 ## Boas praticas
 
-- Sempre chame `ota.loop()` no `loop()` principal.
-- Use senha de AP com pelo menos 8 caracteres (ou string vazia para AP aberto).
-- Em producao, prefira AP de fallback apenas para recuperacao.
-- Defina `hostname` unico por dispositivo.
-
-## Troubleshooting
-
-### OTA nao aparece na IDE
-
-- Confirme que `ota.begin()` retornou `true`.
-- Confirme que o dispositivo e o computador estao na mesma rede.
-- Valide `hostname.local` e IP no serial monitor.
-
-### Cai sempre em AP
-
-- Verifique SSID/senha de station.
-- Aumente timeout com `setStationConnectTimeoutMs(...)`.
-
-### mDNS nao resolve
-
-- Tente upload OTA pelo IP direto.
-- Verifique se a rede bloqueia multicast.
+- Sempre chame `ota.loop()` no loop principal.
+- Mantenha AP senha com 8+ caracteres (ou vazio para aberto).
+- Defina prioridade das redes station na ordem de insercao.
+- Use `savePreferences()` apos alterar configuracoes no codigo.
 
 ## Licenca
 

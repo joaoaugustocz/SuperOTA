@@ -10,12 +10,13 @@ void setup() {
 
   // Se nao houver credenciais salvas, define um perfil inicial.
   if (!ota.hasStationCredentials()) {
-    ota.setStationCredentials("MinhaRede", "MinhaSenha");
+    ota.clearStationNetworks();
+    ota.addStationNetwork("MinhaRede", "MinhaSenha");
+    ota.addStationNetwork("MinhaRedeBackup", "MinhaSenhaBackup");
     ota.setAccessPointCredentials("SuperOTA-Recovery", "12345678");
     ota.setHostname("superota-no1");
     ota.setPreferAccessPoint(false);  // tenta station antes de AP
-    // Opcional: em target ESP32-P4 o modo seguro ja vem ativado por padrao.
-    // ota.setSafeP4Mode(true);
+    ota.enableSerialConfigCommand(true, "configota");
     ota.savePreferences();
   }
 
