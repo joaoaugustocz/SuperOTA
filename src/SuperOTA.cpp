@@ -212,8 +212,8 @@ uint16_t SuperOTA::telnetPort() const {
   return _telnetPort;
 }
 
-bool SuperOTA::telnetClientConnected() const {
-  return _telnetEnabled && _telnetClient && _telnetClient.connected();
+bool SuperOTA::telnetClientConnected() {
+  return _telnetEnabled && _telnetClient.connected();
 }
 
 void SuperOTA::enableSerialConfigCommand(bool enable, const char* command) {
@@ -948,7 +948,7 @@ void SuperOTA::processTelnet() {
     if (_telnetClient) {
       _telnetClient.stop();
     }
-    WiFiClient incoming = _telnetServer.available();
+    WiFiClient incoming = _telnetServer.accept();
     if (incoming && incoming.connected()) {
       _telnetClient = incoming;
       _telnetClient.println(F("[SuperOTA] Telnet conectado."));

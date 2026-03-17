@@ -33,7 +33,7 @@ public:
   void enableTelnetSerial(bool enable, uint16_t port = 23);
   bool telnetSerialEnabled() const;
   uint16_t telnetPort() const;
-  bool telnetClientConnected() const;
+  bool telnetClientConnected();
 
   void enableSerialConfigCommand(bool enable = true, const char* command = "configota");
   bool startConfigPortal(const char* apSsid = nullptr, const char* apPassword = nullptr);
