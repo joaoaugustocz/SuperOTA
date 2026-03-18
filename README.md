@@ -116,6 +116,14 @@ Comportamento em AP:
 - `http://hostname.local` em AP depende de suporte mDNS do cliente/rede e pode nao resolver em todos os celulares/PCs.
 - A biblioteca responde endpoints de captive portal (`/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`, etc.) com redirecionamento para aumentar a chance de autoabertura.
 
+Diagnostico rapido quando nao abre automaticamente:
+
+- Verifique no serial se aparecem logs `Captive probe: ...` apos conectar no AP.
+- Se nao houver probe, o cliente nao iniciou teste captive (comum por politica do SO/rede salva).
+- No Android, teste com `DNS Privado` em Automatico/Desligado.
+- Esqueca a rede AP no celular/PC e conecte novamente.
+- Acesso manual sempre funciona em `http://192.168.4.1`.
+
 Sobre serial:
 
 - comandos (`configota`, `1`, `2`, etc.) podem ser enviados por:
