@@ -114,6 +114,8 @@ SuperOTA::SuperOTA()
       _configPortalRunning(false),
       _configPortalUsesAp(false),
       _awaitingPortalModeChoice(false),
+      _deferredPortalStop(false),
+      _deferredPortalResumeAuto(true),
       _dnsServer(),
       _dnsRunning(false),
       _prefs() {}
@@ -764,6 +766,7 @@ void SuperOTA::runConfigPortalForegroundLoop() {
     processSerialCommands();
     processTelnet();
     updateDebugSummary();
+    handleDeferredPortalStop();
 
     if (_dnsRunning) {
       _dnsServer.processNextRequest();
@@ -773,6 +776,17 @@ void SuperOTA::runConfigPortalForegroundLoop() {
     }
     delay(10);
   }
+}
+
+void SuperOTA::handleDeferredPortalStop() {
+  if (!_deferredPortalStop) {
+    return;
+  }
+
+  const bool resumeAuto = _deferredPortalResumeAuto;
+  _deferredPortalStop = false;
+  _deferredPortalResumeAuto = true;
+  stopConfigPortal(resumeAuto);
 }
 
 void SuperOTA::printConfigPortalEndpoints() const {
@@ -811,6 +825,8 @@ void SuperOTA::stopConfigPortal(bool resumeAuto) {
   }
   _configPortalRunning = false;
   _awaitingPortalModeChoice = false;
+  _deferredPortalStop = false;
+  _deferredPortalResumeAuto = true;
 
   if (_dnsRunning) {
     _dnsServer.stop();
@@ -961,6 +977,7 @@ bool SuperOTA::beginAccessPoint(const char* ssid, const char* password) {
 void SuperOTA::loop() {
   processSerialCommands();
   processTelnet();
+  handleDeferredPortalStop();
 
   if (_configPortalRunning && _configServer != nullptr) {
     updateDebugSummary();
@@ -1668,8 +1685,8 @@ void SuperOTA::handleConfigSave() {
   response += F("<p>Voce pode fechar esta pagina.</p></div></body></html>");
 
   _configServer->send(200, "text/html", response);
-  delay(120);
-  stopConfigPortal(true);
+  _deferredPortalResumeAuto = true;
+  _deferredPortalStop = true;
 }
 
 void SuperOTA::handleConfigScan() {

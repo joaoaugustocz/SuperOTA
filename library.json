@@ -1,6 +1,6 @@
 {
   "name": "SuperOTA",
-  "version": "1.1.8",
+  "version": "1.1.9",
   "description": "OTA helper for ESP32 with STA/AP fallback, captive config portal, mDNS and Telnet serial.",
   "keywords": [
     "esp32",

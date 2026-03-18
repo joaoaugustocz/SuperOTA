@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.9 - 2026-03-18
+- Correcao de estabilidade no fechamento do portal:
+  - `handleConfigSave()` agora agenda o fechamento do portal para o proximo ciclo de `loop()`, em vez de chamar `stopConfigPortal(true)` dentro do callback HTTP.
+  - evita race/use-after-free ao destruir `WebServer` durante o proprio processamento de request.
+- Ajuste importante para cenarios P4+C6 com transicao AP -> STA apos salvar configuracoes.
+
 ## 1.1.8 - 2026-03-18
 - Novos exemplos FreeRTOS:
   - `FreeRTOSBasic` (task dedicada para `ota.loop()` + task de aplicacao).

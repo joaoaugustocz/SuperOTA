@@ -124,6 +124,7 @@ private:
   bool startConfigPortalOnStation();
   bool startConfigPortalOnAccessPoint(const char* apSsid, const char* apPassword);
   void runConfigPortalForegroundLoop();
+  void handleDeferredPortalStop();
   void printConfigPortalEndpoints() const;
   void broadcastRaw(const char* message);
   void handleConfigPage();
@@ -201,6 +202,8 @@ private:
   bool _configPortalRunning;
   bool _configPortalUsesAp;
   bool _awaitingPortalModeChoice;
+  bool _deferredPortalStop;
+  bool _deferredPortalResumeAuto;
   DNSServer _dnsServer;
   bool _dnsRunning;
 
