@@ -204,6 +204,7 @@ private:
   bool _awaitingPortalModeChoice;
   bool _deferredPortalStop;
   bool _deferredPortalResumeAuto;
+  uint32_t _deferredPortalStopAfterMs;
   DNSServer _dnsServer;
   bool _dnsRunning;
 

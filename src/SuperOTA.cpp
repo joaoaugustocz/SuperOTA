@@ -22,6 +22,7 @@ constexpr uint8_t kSafeP4ConnectAttempts = 2;
 constexpr uint16_t kSafeP4RetryDelayMs = 250;
 constexpr uint16_t kSafeP4LinkStabilizeDelayMs = 120;
 constexpr uint16_t kConfigPortalPort = 80;
+constexpr uint16_t kConfigPortalDeferredStopMs = 1200;
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 constexpr bool kBuildTargetIsP4 = true;
@@ -116,6 +117,7 @@ SuperOTA::SuperOTA()
       _awaitingPortalModeChoice(false),
       _deferredPortalStop(false),
       _deferredPortalResumeAuto(true),
+      _deferredPortalStopAfterMs(0),
       _dnsServer(),
       _dnsRunning(false),
       _prefs() {}
@@ -766,7 +768,6 @@ void SuperOTA::runConfigPortalForegroundLoop() {
     processSerialCommands();
     processTelnet();
     updateDebugSummary();
-    handleDeferredPortalStop();
 
     if (_dnsRunning) {
       _dnsServer.processNextRequest();
@@ -774,6 +775,7 @@ void SuperOTA::runConfigPortalForegroundLoop() {
     if (_configServer != nullptr) {
       _configServer->handleClient();
     }
+    handleDeferredPortalStop();
     delay(10);
   }
 }
@@ -783,9 +785,17 @@ void SuperOTA::handleDeferredPortalStop() {
     return;
   }
 
+  if (_deferredPortalStopAfterMs != 0U) {
+    const int32_t remaining = static_cast<int32_t>(_deferredPortalStopAfterMs - millis());
+    if (remaining > 0) {
+      return;
+    }
+  }
+
   const bool resumeAuto = _deferredPortalResumeAuto;
   _deferredPortalStop = false;
   _deferredPortalResumeAuto = true;
+  _deferredPortalStopAfterMs = 0U;
   stopConfigPortal(resumeAuto);
 }
 
@@ -827,6 +837,7 @@ void SuperOTA::stopConfigPortal(bool resumeAuto) {
   _awaitingPortalModeChoice = false;
   _deferredPortalStop = false;
   _deferredPortalResumeAuto = true;
+  _deferredPortalStopAfterMs = 0U;
 
   if (_dnsRunning) {
     _dnsServer.stop();
@@ -977,7 +988,6 @@ bool SuperOTA::beginAccessPoint(const char* ssid, const char* password) {
 void SuperOTA::loop() {
   processSerialCommands();
   processTelnet();
-  handleDeferredPortalStop();
 
   if (_configPortalRunning && _configServer != nullptr) {
     updateDebugSummary();
@@ -985,6 +995,7 @@ void SuperOTA::loop() {
       _dnsServer.processNextRequest();
     }
     _configServer->handleClient();
+    handleDeferredPortalStop();
     return;
   }
 
@@ -992,6 +1003,7 @@ void SuperOTA::loop() {
     ArduinoOTA.handle();
   }
   updateDebugSummary();
+  handleDeferredPortalStop();
 }
 
 void SuperOTA::enable(bool enable) {
@@ -1330,10 +1342,8 @@ void SuperOTA::configureOTAHandlers() {
 }
 
 void SuperOTA::startMDNS() {
-  if (_mdnsRunning) {
-    MDNS.end();
-    _mdnsRunning = false;
-  }
+  MDNS.end();
+  _mdnsRunning = false;
 
   if (MDNS.begin(_hostname.c_str())) {
     _mdnsRunning = true;
@@ -1686,6 +1696,7 @@ void SuperOTA::handleConfigSave() {
 
   _configServer->send(200, "text/html", response);
   _deferredPortalResumeAuto = true;
+  _deferredPortalStopAfterMs = millis() + kConfigPortalDeferredStopMs;
   _deferredPortalStop = true;
 }
 

@@ -26,6 +26,16 @@ TaskHandle_t consoleTaskHandle = nullptr;
 
 String consoleBuffer;
 
+void sanitizeConsoleCommand(String& cmd) {
+  while (cmd.length() > 0) {
+    const uint8_t c = static_cast<uint8_t>(cmd[0]);
+    if (c >= 32U && c <= 126U) {
+      break;
+    }
+    cmd.remove(0, 1);
+  }
+}
+
 bool enqueueOtaCommand(OtaCommandType type) {
   if (otaQueue == nullptr) {
     return false;
@@ -103,6 +113,7 @@ void printConsoleHelp() {
 void processConsoleCommand(const String& cmdRaw) {
   String cmd = cmdRaw;
   cmd.trim();
+  sanitizeConsoleCommand(cmd);
   cmd.toLowerCase();
 
   if (cmd.length() == 0) {
@@ -215,7 +226,8 @@ void setup() {
 
   BaseType_t ok;
 
-  ok = xTaskCreate(otaServiceTask, "OTA_Service", 7168, nullptr, 3, &otaServiceTaskHandle);
+  // Margem extra de stack para portal + reconexao + callbacks de rede em alvo P4.
+  ok = xTaskCreate(otaServiceTask, "OTA_Service", 10240, nullptr, 3, &otaServiceTaskHandle);
   if (ok != pdPASS) {
     Serial.println("[APP] Falha ao criar OTA_Service.");
   }
