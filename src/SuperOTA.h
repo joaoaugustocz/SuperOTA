@@ -29,6 +29,11 @@ public:
   void setSafeP4Mode(bool enable);
   bool safeP4Mode() const;
   bool isP4Target() const;
+  void enableDebugMetrics(bool enable = true);
+  bool debugMetricsEnabled() const;
+  void setDebugSummaryIntervalMs(uint32_t intervalMs);
+  uint32_t debugSummaryIntervalMs() const;
+  void printDebugSummary();
 
   void enableTelnetSerial(bool enable, uint16_t port = 23);
   bool telnetSerialEnabled() const;
@@ -127,6 +132,36 @@ private:
 
   void stationListToMultiline(String& out) const;
   void parseAndSetStationList(const String& rawList);
+  void resetDebugMetrics();
+  void handleDebugWifiEvent(arduino_event_id_t event, arduino_event_info_t info);
+  void updateDebugSummary();
+  int findDebugClientIndex(const uint8_t mac[6]) const;
+  int getOrCreateDebugClientIndex(const uint8_t mac[6]);
+  static bool debugMacEqual(const uint8_t a[6], const uint8_t b[6]);
+  static String debugMacToString(const uint8_t mac[6]);
+
+  static constexpr uint32_t kDefaultDebugSummaryIntervalMs = 30000;
+  static constexpr uint32_t kDebugLateDhcpThresholdMs = 1500;
+  static constexpr uint8_t kDebugMaxTrackedClients = 16;
+
+  struct DebugClient {
+    bool used = false;
+    uint8_t mac[6] = {0};
+    uint32_t connectMs = 0;
+  };
+
+  struct DebugStats {
+    uint32_t bootMs = 0;
+    uint32_t apStartCount = 0;
+    uint32_t connectCount = 0;
+    uint32_t disconnectCount = 0;
+    uint32_t ipAssignedCount = 0;
+    uint32_t unknownIpAssignedCount = 0;
+    uint32_t dhcpMinMs = 0xFFFFFFFFUL;
+    uint32_t dhcpMaxMs = 0;
+    uint64_t dhcpSumMs = 0;
+    uint32_t lateDhcpCount = 0;
+  };
 
   bool _enabled;
   bool _configured;
@@ -143,6 +178,13 @@ private:
   String _hostname;
   bool _preferAccessPoint;
   bool _safeP4Mode;
+  bool _debugMetricsEnabled;
+  uint32_t _debugSummaryIntervalMs;
+  uint32_t _debugLastSummaryMs;
+  wifi_event_id_t _debugEventHandlerId;
+  bool _debugEventHandlerRegistered;
+  DebugStats _debugStats;
+  DebugClient _debugClients[kDebugMaxTrackedClients];
 
   WiFiServer _telnetServer;
   WiFiClient _telnetClient;

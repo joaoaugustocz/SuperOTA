@@ -1,0 +1,19 @@
+SuperOTA	KEYWORD1
+
+begin	KEYWORD2
+loop	KEYWORD2
+beginSerial	KEYWORD2
+setStationCredentials	KEYWORD2
+addStationNetwork	KEYWORD2
+clearStationNetworks	KEYWORD2
+setAccessPointCredentials	KEYWORD2
+setHostname	KEYWORD2
+setPreferAccessPoint	KEYWORD2
+setSafeP4Mode	KEYWORD2
+enableSerialConfigCommand	KEYWORD2
+startConfigPortal	KEYWORD2
+stopConfigPortal	KEYWORD2
+enableTelnetSerial	KEYWORD2
+enableDebugMetrics	KEYWORD2
+setDebugSummaryIntervalMs	KEYWORD2
+printDebugSummary	KEYWORD2

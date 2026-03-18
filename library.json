@@ -1,0 +1,28 @@
+{
+  "name": "SuperOTA",
+  "version": "1.1.5",
+  "description": "OTA helper for ESP32 with STA/AP fallback, captive config portal, mDNS and Telnet serial.",
+  "keywords": [
+    "esp32",
+    "ota",
+    "arduinoota",
+    "wifi",
+    "captive-portal",
+    "mdns",
+    "telnet"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joaoaugustocz/SuperOTA.git"
+  },
+  "authors": [
+    {
+      "name": "Baratinha Team",
+      "maintainer": true
+    }
+  ],
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "headers": "SuperOTA.h"
+}

@@ -5,6 +5,9 @@
 #include <cstdio>
 #include <cstring>
 #include <esp_system.h>
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include <Network.h>
+#endif
 
 namespace {
 constexpr uint16_t kArduinoOtaPort = 3232;
@@ -56,6 +59,27 @@ String htmlEscape(const String& value) {
 
   return out;
 }
+
+bool prepareP4AccessPointStack(bool safeMode) {
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  if (!Network.begin()) {
+    Serial.println(F("[SuperOTA] ERRO: Network.begin falhou no P4."));
+    return false;
+  }
+
+  if (safeMode) {
+    delay(kSafeP4RetryDelayMs);
+  }
+
+  if (!WiFi.AP.begin()) {
+    Serial.println(F("[SuperOTA] ERRO: WiFi.AP.begin falhou no P4."));
+    return false;
+  }
+#else
+  (void)safeMode;
+#endif
+  return true;
+}
 }  // namespace
 
 SuperOTA::SuperOTA()
@@ -70,6 +94,13 @@ SuperOTA::SuperOTA()
       _hostname(kDefaultHostname),
       _preferAccessPoint(false),
       _safeP4Mode(kBuildTargetIsP4),
+      _debugMetricsEnabled(false),
+      _debugSummaryIntervalMs(kDefaultDebugSummaryIntervalMs),
+      _debugLastSummaryMs(0),
+      _debugEventHandlerId(0),
+      _debugEventHandlerRegistered(false),
+      _debugStats(),
+      _debugClients(),
       _telnetServer(23),
       _telnetClient(),
       _telnetEnabled(true),
@@ -189,6 +220,228 @@ bool SuperOTA::isP4Target() const {
   return kBuildTargetIsP4;
 }
 
+void SuperOTA::enableDebugMetrics(bool enable) {
+  if (enable) {
+    if (_debugEventHandlerRegistered) {
+      WiFi.removeEvent(_debugEventHandlerId);
+      _debugEventHandlerRegistered = false;
+      _debugEventHandlerId = 0;
+    }
+
+    _debugEventHandlerId = WiFi.onEvent([this](arduino_event_id_t event, arduino_event_info_t info) {
+      this->handleDebugWifiEvent(event, info);
+    });
+    _debugEventHandlerRegistered = true;
+
+    _debugMetricsEnabled = true;
+    resetDebugMetrics();
+    println(F("[SuperOTA][DEBUG] Modo debug de metricas ativado."));
+    println(F("[SuperOTA][DEBUG] Comandos: debug-summary, debug-off."));
+    return;
+  }
+
+  _debugMetricsEnabled = false;
+  if (_debugEventHandlerRegistered) {
+    WiFi.removeEvent(_debugEventHandlerId);
+    _debugEventHandlerRegistered = false;
+    _debugEventHandlerId = 0;
+  }
+  println(F("[SuperOTA][DEBUG] Modo debug de metricas desativado."));
+}
+
+bool SuperOTA::debugMetricsEnabled() const {
+  return _debugMetricsEnabled;
+}
+
+void SuperOTA::setDebugSummaryIntervalMs(uint32_t intervalMs) {
+  _debugSummaryIntervalMs = (intervalMs == 0) ? kDefaultDebugSummaryIntervalMs : intervalMs;
+}
+
+uint32_t SuperOTA::debugSummaryIntervalMs() const {
+  return _debugSummaryIntervalMs;
+}
+
+void SuperOTA::resetDebugMetrics() {
+  _debugStats = DebugStats();
+  _debugStats.bootMs = millis();
+  _debugStats.dhcpMinMs = 0xFFFFFFFFUL;
+  _debugLastSummaryMs = _debugStats.bootMs;
+
+  for (uint8_t i = 0; i < kDebugMaxTrackedClients; ++i) {
+    _debugClients[i].used = false;
+    _debugClients[i].connectMs = 0;
+    memset(_debugClients[i].mac, 0, sizeof(_debugClients[i].mac));
+  }
+}
+
+bool SuperOTA::debugMacEqual(const uint8_t a[6], const uint8_t b[6]) {
+  return memcmp(a, b, 6) == 0;
+}
+
+String SuperOTA::debugMacToString(const uint8_t mac[6]) {
+  char buffer[18];
+  snprintf(buffer, sizeof(buffer), "%02X:%02X:%02X:%02X:%02X:%02X",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  return String(buffer);
+}
+
+int SuperOTA::findDebugClientIndex(const uint8_t mac[6]) const {
+  for (uint8_t i = 0; i < kDebugMaxTrackedClients; ++i) {
+    if (_debugClients[i].used && debugMacEqual(_debugClients[i].mac, mac)) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+int SuperOTA::getOrCreateDebugClientIndex(const uint8_t mac[6]) {
+  const int existing = findDebugClientIndex(mac);
+  if (existing >= 0) {
+    return existing;
+  }
+
+  for (uint8_t i = 0; i < kDebugMaxTrackedClients; ++i) {
+    if (!_debugClients[i].used) {
+      _debugClients[i].used = true;
+      memcpy(_debugClients[i].mac, mac, 6);
+      _debugClients[i].connectMs = 0;
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+void SuperOTA::handleDebugWifiEvent(arduino_event_id_t event, arduino_event_info_t info) {
+  if (!_debugMetricsEnabled) {
+    return;
+  }
+
+  const uint32_t nowMs = millis();
+  const uint32_t elapsedMs = nowMs - _debugStats.bootMs;
+
+  if (event == ARDUINO_EVENT_WIFI_AP_START) {
+    ++_debugStats.apStartCount;
+    Serial.printf("[SuperOTA][DEBUG] +%lums AP_START count=%lu\n", elapsedMs, _debugStats.apStartCount);
+    return;
+  }
+
+  if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED) {
+    ++_debugStats.connectCount;
+    const wifi_event_ap_staconnected_t& e = info.wifi_ap_staconnected;
+    const int idx = getOrCreateDebugClientIndex(e.mac);
+    if (idx >= 0) {
+      _debugClients[idx].connectMs = nowMs;
+    }
+    Serial.printf("[SuperOTA][DEBUG] +%lums AP_STACONNECTED mac=%02X:%02X:%02X:%02X:%02X:%02X aid=%u total=%lu\n",
+                  elapsedMs, e.mac[0], e.mac[1], e.mac[2], e.mac[3], e.mac[4], e.mac[5], e.aid,
+                  _debugStats.connectCount);
+    return;
+  }
+
+  if (event == ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED) {
+    ++_debugStats.ipAssignedCount;
+    const ip_event_ap_staipassigned_t& e = info.wifi_ap_staipassigned;
+    const IPAddress ip(e.ip.addr);
+
+    const int idx = findDebugClientIndex(e.mac);
+    if (idx >= 0 && _debugClients[idx].connectMs > 0) {
+      const uint32_t dhcpMs = nowMs - _debugClients[idx].connectMs;
+      if (dhcpMs < _debugStats.dhcpMinMs) {
+        _debugStats.dhcpMinMs = dhcpMs;
+      }
+      if (dhcpMs > _debugStats.dhcpMaxMs) {
+        _debugStats.dhcpMaxMs = dhcpMs;
+      }
+      _debugStats.dhcpSumMs += dhcpMs;
+      if (dhcpMs > kDebugLateDhcpThresholdMs) {
+        ++_debugStats.lateDhcpCount;
+      }
+      _debugClients[idx].connectMs = 0;
+      Serial.printf("[SuperOTA][DEBUG] +%lums AP_STAIPASSIGNED mac=%s ip=%s dhcpMs=%lu\n",
+                    elapsedMs, debugMacToString(e.mac).c_str(), ip.toString().c_str(), dhcpMs);
+    } else {
+      ++_debugStats.unknownIpAssignedCount;
+      Serial.printf("[SuperOTA][DEBUG] +%lums AP_STAIPASSIGNED mac=%s ip=%s (sem match)\n",
+                    elapsedMs, debugMacToString(e.mac).c_str(), ip.toString().c_str());
+    }
+    return;
+  }
+
+  if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
+    ++_debugStats.disconnectCount;
+    const wifi_event_ap_stadisconnected_t& e = info.wifi_ap_stadisconnected;
+    Serial.printf("[SuperOTA][DEBUG] +%lums AP_STADISCONNECTED mac=%02X:%02X:%02X:%02X:%02X:%02X aid=%u total=%lu\n",
+                  elapsedMs, e.mac[0], e.mac[1], e.mac[2], e.mac[3], e.mac[4], e.mac[5], e.aid,
+                  _debugStats.disconnectCount);
+  }
+}
+
+void SuperOTA::printDebugSummary() {
+  if (!_debugMetricsEnabled) {
+    println(F("[SuperOTA][DEBUG] Modo debug desativado."));
+    return;
+  }
+
+  const uint32_t now = millis();
+  const uint32_t uptime = now - _debugStats.bootMs;
+  const uint8_t stationsNow = (_configPortalUsesAp || WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA)
+                                  ? WiFi.softAPgetStationNum()
+                                  : 0;
+
+  Serial.println();
+  Serial.println(F("[SuperOTA][DEBUG] ===== Resumo ====="));
+  Serial.print(F("[SuperOTA][DEBUG] Uptime (ms): "));
+  Serial.println(uptime);
+  Serial.print(F("[SuperOTA][DEBUG] AP SSID: "));
+  Serial.println(WiFi.softAPSSID());
+  Serial.print(F("[SuperOTA][DEBUG] AP IP: "));
+  Serial.println(WiFi.softAPIP());
+  Serial.print(F("[SuperOTA][DEBUG] Estacoes conectadas agora: "));
+  Serial.println(stationsNow);
+  Serial.print(F("[SuperOTA][DEBUG] AP_START: "));
+  Serial.println(_debugStats.apStartCount);
+  Serial.print(F("[SuperOTA][DEBUG] STACONNECTED: "));
+  Serial.println(_debugStats.connectCount);
+  Serial.print(F("[SuperOTA][DEBUG] STADISCONNECTED: "));
+  Serial.println(_debugStats.disconnectCount);
+  Serial.print(F("[SuperOTA][DEBUG] STAIPASSIGNED: "));
+  Serial.println(_debugStats.ipAssignedCount);
+  Serial.print(F("[SuperOTA][DEBUG] STAIPASSIGNED sem match: "));
+  Serial.println(_debugStats.unknownIpAssignedCount);
+
+  if (_debugStats.ipAssignedCount > 0) {
+    const uint32_t avgDhcpMs = static_cast<uint32_t>(_debugStats.dhcpSumMs / _debugStats.ipAssignedCount);
+    Serial.print(F("[SuperOTA][DEBUG] DHCP min/avg/max (ms): "));
+    Serial.print(_debugStats.dhcpMinMs);
+    Serial.print('/');
+    Serial.print(avgDhcpMs);
+    Serial.print('/');
+    Serial.println(_debugStats.dhcpMaxMs);
+    Serial.print(F("[SuperOTA][DEBUG] DHCP > "));
+    Serial.print(kDebugLateDhcpThresholdMs);
+    Serial.print(F("ms: "));
+    Serial.println(_debugStats.lateDhcpCount);
+  } else {
+    Serial.println(F("[SuperOTA][DEBUG] DHCP: sem amostras."));
+  }
+
+  Serial.println(F("[SuperOTA][DEBUG] ===================="));
+}
+
+void SuperOTA::updateDebugSummary() {
+  if (!_debugMetricsEnabled) {
+    return;
+  }
+
+  const uint32_t now = millis();
+  if ((now - _debugLastSummaryMs) < _debugSummaryIntervalMs) {
+    return;
+  }
+
+  _debugLastSummaryMs = now;
+  printDebugSummary();
+}
+
 void SuperOTA::enableTelnetSerial(bool enable, uint16_t port) {
   _telnetEnabled = enable;
   if (port != 0) {
@@ -303,23 +556,39 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
   _configured = false;
   _stationMode = false;
   stopNetworking();
-  WiFi.mode(WIFI_AP);
-  if (_hostname.length()) {
-    WiFi.softAPsetHostname(_hostname.c_str());
-  }
 
   const IPAddress apIp(192, 168, 4, 1);
   const IPAddress apGateway(192, 168, 4, 1);
   const IPAddress apSubnet(255, 255, 255, 0);
   const IPAddress apDhcpLeaseStart(192, 168, 4, 2);
   const IPAddress apDns(192, 168, 4, 1);
+
+  bool apOk = false;
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  if (!prepareP4AccessPointStack(_safeP4Mode)) {
+    return false;
+  }
+  if (_hostname.length()) {
+    WiFi.softAPsetHostname(_hostname.c_str());
+  }
+  if (!WiFi.AP.config(apIp, apGateway, apSubnet, apDhcpLeaseStart, apDns)) {
+    Serial.println(F("[SuperOTA] Aviso: falha ao aplicar AP.config no P4."));
+  }
+  apOk = WiFi.AP.create(configSsid.c_str(), configPass.c_str(), 1, 0, 4);
+#else
+  WiFi.mode(WIFI_AP);
+  if (_hostname.length()) {
+    WiFi.softAPsetHostname(_hostname.c_str());
+  }
   if (!WiFi.softAPConfig(apIp, apGateway, apSubnet, apDhcpLeaseStart, apDns)) {
     Serial.println(F("[SuperOTA] Aviso: falha ao aplicar softAPConfig personalizada."));
   }
 
   const bool hasPassword = configPass.length() > 0;
-  const bool apOk = hasPassword ? WiFi.softAP(configSsid.c_str(), configPass.c_str())
-                                : WiFi.softAP(configSsid.c_str());
+  apOk = hasPassword ? WiFi.softAP(configSsid.c_str(), configPass.c_str())
+                     : WiFi.softAP(configSsid.c_str());
+#endif
+
   if (!apOk) {
     Serial.println(F("[SuperOTA] Falha ao abrir AP do portal."));
     return false;
@@ -329,11 +598,17 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
   }
 
   uint32_t waitStartMs = millis();
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  while (!hasValidIp(WiFi.AP.localIP()) && (millis() - waitStartMs) < 3000U) {
+    delay(25);
+  }
+  const IPAddress currentApIp = WiFi.AP.localIP();
+#else
   while (!hasValidIp(WiFi.softAPIP()) && (millis() - waitStartMs) < 3000U) {
     delay(25);
   }
-
   const IPAddress currentApIp = WiFi.softAPIP();
+#endif
   if (!hasValidIp(currentApIp)) {
     Serial.println(F("[SuperOTA] AP sem IP valido para iniciar portal."));
     return false;
@@ -354,8 +629,10 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
 
   _dnsServer.stop();
   _dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-  _dnsServer.start(53, "*", currentApIp);
-  _dnsRunning = true;
+  _dnsRunning = _dnsServer.start(53, "*", currentApIp);
+  if (!_dnsRunning) {
+    Serial.println(F("[SuperOTA] Aviso: falha ao iniciar DNS captive."));
+  }
 
   _configServer = new WebServer(kConfigPortalPort);
   const String apIpText = currentApIp.toString();
@@ -436,10 +713,12 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
     if (_configServer == nullptr) {
       return;
     }
-    Serial.print(F("[SuperOTA] Captive probe: "));
-    Serial.print(_configServer->hostHeader());
-    Serial.print(F(" "));
-    Serial.println(_configServer->uri());
+    if (_debugMetricsEnabled) {
+      Serial.print(F("[SuperOTA] Captive probe: "));
+      Serial.print(_configServer->hostHeader());
+      Serial.print(F(" "));
+      Serial.println(_configServer->uri());
+    }
     _configServer->sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     _configServer->sendHeader("Pragma", "no-cache");
     _configServer->sendHeader("Expires", "-1");
@@ -484,6 +763,7 @@ void SuperOTA::runConfigPortalForegroundLoop() {
   while (_configPortalRunning) {
     processSerialCommands();
     processTelnet();
+    updateDebugSummary();
 
     if (_dnsRunning) {
       _dnsServer.processNextRequest();
@@ -683,6 +963,7 @@ void SuperOTA::loop() {
   processTelnet();
 
   if (_configPortalRunning && _configServer != nullptr) {
+    updateDebugSummary();
     if (_dnsRunning) {
       _dnsServer.processNextRequest();
     }
@@ -693,6 +974,7 @@ void SuperOTA::loop() {
   if (_enabled && _configured) {
     ArduinoOTA.handle();
   }
+  updateDebugSummary();
 }
 
 void SuperOTA::enable(bool enable) {
@@ -948,6 +1230,39 @@ bool SuperOTA::beginStationOnce(const char* ssid, const char* password) {
 
 bool SuperOTA::beginAccessPointOnce(const char* ssid, const char* password) {
   stopNetworking();
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  if (!prepareP4AccessPointStack(_safeP4Mode)) {
+    return false;
+  }
+
+  if (_hostname.length()) {
+    WiFi.softAPsetHostname(_hostname.c_str());
+  }
+
+  const IPAddress apIp(192, 168, 4, 1);
+  const IPAddress apGateway(192, 168, 4, 1);
+  const IPAddress apSubnet(255, 255, 255, 0);
+  const IPAddress apDhcpLeaseStart(192, 168, 4, 2);
+  const IPAddress apDns(192, 168, 4, 1);
+  if (!WiFi.AP.config(apIp, apGateway, apSubnet, apDhcpLeaseStart, apDns)) {
+    Serial.println(F("[SuperOTA] Aviso: falha ao aplicar AP.config no P4."));
+  }
+
+  const bool apOk = WiFi.AP.create(ssid, password, 1, 0, 4);
+  if (!apOk) {
+    return false;
+  }
+
+  if (_safeP4Mode) {
+    delay(kSafeP4LinkStabilizeDelayMs);
+  }
+
+  uint32_t waitStartMs = millis();
+  while (!hasValidIp(WiFi.AP.localIP()) && (millis() - waitStartMs) < 3000U) {
+    delay(25);
+  }
+  return hasValidIp(WiFi.AP.localIP());
+#else
   if (_safeP4Mode) {
     delay(kSafeP4RetryDelayMs);
   }
@@ -969,6 +1284,7 @@ bool SuperOTA::beginAccessPointOnce(const char* ssid, const char* password) {
   }
 
   return hasValidIp(WiFi.softAPIP());
+#endif
 }
 
 void SuperOTA::configureOTAHandlers() {
@@ -1127,7 +1443,7 @@ void SuperOTA::processTelnet() {
     if (incoming && incoming.connected()) {
       _telnetClient = incoming;
       _telnetClient.println(F("[SuperOTA] Telnet conectado."));
-      _telnetClient.println(F("[SuperOTA] Comandos: configota, config-stop, config-help."));
+      _telnetClient.println(F("[SuperOTA] Comandos: configota, config-stop, config-help, debug-on, debug-off, debug-summary."));
       _telnetClient.print(F("[SuperOTA] Host: "));
       _telnetClient.println(_hostname);
     }
@@ -1227,7 +1543,22 @@ void SuperOTA::processCommandLine(const String& command) {
   if (command == "config-help") {
     print(F("[SuperOTA] Comandos: "));
     print(_serialConfigCommand);
-    println(F(", config-stop, config-help, 1, 2"));
+    println(F(", config-stop, config-help, 1, 2, debug-on, debug-off, debug-summary"));
+    return;
+  }
+
+  if (command == "debug-on") {
+    enableDebugMetrics(true);
+    return;
+  }
+
+  if (command == "debug-off") {
+    enableDebugMetrics(false);
+    return;
+  }
+
+  if (command == "debug-summary") {
+    printDebugSummary();
     return;
   }
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.5 - 2026-03-18
+- Novo modo de debug com metricas de AP/captive portal:
+  - API publica: `enableDebugMetrics`, `setDebugSummaryIntervalMs`, `printDebugSummary`.
+  - comandos serial/Telnet: `debug-on`, `debug-off`, `debug-summary`.
+  - resumo periodico automatico com uptime, clientes conectados e delays DHCP.
+- Logs verbosos de `Captive probe` agora so aparecem com debug ativo.
+- README atualizado com secao dedicada de debug.
+- Estrutura da biblioteca alinhada para distribuicao Arduino/PlatformIO (`library.json`, `keywords.txt`, `LICENSE`, workflow de CI).
+
+## 1.1.4 - 2026-03-18
+- Fluxo AP no ESP32-P4 reforcado para captive portal: uso de `Network.begin()` + `WiFi.AP.begin/config/create` nas rotas de AP da biblioteca.
+- `startConfigPortalOnAccessPoint` no P4 agora segue o mesmo caminho do teste que validou abertura do portal no boot.
+- Inicializacao do DNS captive passou a validar retorno de `start(...)` e registrar aviso quando falhar.
+- Mantido caminho legado para outros ESP32 (softAP) para preservar compatibilidade.
+
 ## 1.1.3 - 2026-03-17
 - AP de configuracao com SSID unico por sessao quando o SSID padrao e usado (`SuperOTA-Setup-XXXX`), para reduzir cache/politica de captive portal nos clientes.
 - Log do portal em AP agora mostra explicitamente o SSID ativo.

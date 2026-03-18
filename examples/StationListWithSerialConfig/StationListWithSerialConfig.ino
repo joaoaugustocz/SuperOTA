@@ -17,12 +17,14 @@ void setup() {
 
   // Comando serial para abrir portal: configota
   ota.enableSerialConfigCommand(true, "configota");
+  ota.setDebugSummaryIntervalMs(30000);  // 30s quando debug estiver ativo
 
   if (!ota.begin()) {
     Serial.println("[APP] Falha ao iniciar OTA.");
   }
 
   Serial.println("[APP] Digite 'configota' no serial para abrir portal web.");
+  Serial.println("[APP] Debug opcional: debug-on, debug-summary, debug-off.");
 }
 
 void loop() {

@@ -12,6 +12,7 @@ Subbiblioteca extraida da `Baratinha` com foco exclusivo em OTA para ESP32.
   - credenciais AP;
   - lista de redes station.
 - Entrada no portal por comando serial (default: `configota`).
+- Modo debug sob demanda para metricas de captive portal/AP.
 
 ## Visao geral
 
@@ -28,6 +29,10 @@ Subbiblioteca extraida da `Baratinha` com foco exclusivo em OTA para ESP32.
 ```text
 SuperOTA/
   library.properties
+  library.json
+  keywords.txt
+  LICENSE
+  .github/workflows/ci.yml
   README.md
   src/
     SuperOTA.h
@@ -118,7 +123,7 @@ Comportamento em AP:
 
 Diagnostico rapido quando nao abre automaticamente:
 
-- Verifique no serial se aparecem logs `Captive probe: ...` apos conectar no AP.
+- Ative debug (`debug-on`) e verifique no serial se aparecem logs `Captive probe: ...` apos conectar no AP.
 - Se nao houver probe, o cliente nao iniciou teste captive (comum por politica do SO/rede salva).
 - No Android, teste com `DNS Privado` em Automatico/Desligado.
 - Esqueca a rede AP no celular/PC e conecte novamente.
@@ -136,6 +141,24 @@ Mapa rapido de portas:
 - OTA (upload de firmware): porta `3232` (ArduinoOTA / espota)
 - Serial sem fio (Telnet): porta `23`
 - Serial USB local: COMx
+
+## Modo debug de metricas
+
+Para ligar/desligar metricas detalhadas de AP/captive:
+
+- comando serial/Telnet `debug-on` -> ativa eventos e resumo periodico
+- comando serial/Telnet `debug-summary` -> imprime resumo na hora
+- comando serial/Telnet `debug-off` -> desativa debug
+
+Por codigo:
+
+```cpp
+ota.enableDebugMetrics(true);      // liga
+ota.setDebugSummaryIntervalMs(30000); // resumo automatico (padrao: 30s)
+ota.printDebugSummary();           // resumo manual
+```
+
+Quando debug esta desligado, os logs verbosos de captive probe nao sao impressos.
 
 No portal voce consegue editar:
 
@@ -178,6 +201,11 @@ Use [examples/StationListWithSerialConfig/StationListWithSerialConfig.ino](examp
 - `void setSafeP4Mode(bool enable)`
 - `bool safeP4Mode() const`
 - `bool isP4Target() const`
+- `void enableDebugMetrics(bool enable = true)`
+- `bool debugMetricsEnabled() const`
+- `void setDebugSummaryIntervalMs(uint32_t intervalMs)`
+- `uint32_t debugSummaryIntervalMs() const`
+- `void printDebugSummary()`
 
 ### Portal / serial
 
@@ -242,4 +270,4 @@ Em outros targets, esse modo nao altera o comportamento padrao.
 
 ## Licenca
 
-Defina a licenca do seu projeto conforme sua politica (ex.: MIT, Apache-2.0).
+MIT. Veja o arquivo `LICENSE`.
