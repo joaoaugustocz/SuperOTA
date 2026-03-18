@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.3 - 2026-03-17
+- AP de configuracao com SSID unico por sessao quando o SSID padrao e usado (`SuperOTA-Setup-XXXX`), para reduzir cache/politica de captive portal nos clientes.
+- Log do portal em AP agora mostra explicitamente o SSID ativo.
+
 ## 1.1.2 - 2026-03-17
 - Captive portal em AP passou a responder probes com redirecionamento `302` para `http://<ap-ip>/`.
 - Roteamento de host no portal: requisicoes para host externo (por DNS catch-all) redirecionam para o host do portal em vez de servir HTML direto.

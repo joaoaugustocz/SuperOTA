@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <esp_system.h>
 
 namespace {
 constexpr uint16_t kArduinoOtaPort = 3232;
@@ -285,7 +286,14 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
     return true;
   }
 
-  String configSsid = (apSsid != nullptr && apSsid[0] != '\0') ? apSsid : kDefaultConfigApSsid;
+  const bool defaultSsidRequested = (apSsid == nullptr || apSsid[0] == '\0');
+  String configSsid = defaultSsidRequested ? String(kDefaultConfigApSsid) : String(apSsid);
+  if (defaultSsidRequested) {
+    const uint32_t token = esp_random() & 0xFFFFU;
+    char suffix[8];
+    snprintf(suffix, sizeof(suffix), "-%04X", static_cast<unsigned>(token));
+    configSsid += suffix;
+  }
   String configPass = (apPassword != nullptr) ? apPassword : "";
   if (configPass.length() > 0 && configPass.length() < 8) {
     Serial.println(F("[SuperOTA] Senha de portal invalida (<8). Abrindo portal sem senha."));
@@ -490,6 +498,8 @@ void SuperOTA::runConfigPortalForegroundLoop() {
 void SuperOTA::printConfigPortalEndpoints() const {
   Serial.println(F("[SuperOTA] Portal de configuracao ativo."));
   if (_configPortalUsesAp) {
+    Serial.print(F("[SuperOTA] AP SSID: "));
+    Serial.println(WiFi.softAPSSID());
     Serial.print(F("[SuperOTA] AP IP: http://"));
     Serial.println(WiFi.softAPIP());
     Serial.print(F("[SuperOTA] mDNS em AP (se suportado no cliente): http://"));
