@@ -255,10 +255,20 @@ bool SuperOTA::startConfigPortalOnStation() {
   }
 
   _configServer = new WebServer(kConfigPortalPort);
-  _configServer->on("/", HTTP_GET, [this]() { handleConfigPage(); });
+  auto renderConfigPage = [this]() {
+    if (_configServer == nullptr) {
+      return;
+    }
+    if (_configServer->method() == HTTP_HEAD) {
+      _configServer->send(200, "text/html", "");
+      return;
+    }
+    handleConfigPage();
+  };
+  _configServer->on("/", HTTP_ANY, renderConfigPage);
   _configServer->on("/save", HTTP_POST, [this]() { handleConfigSave(); });
   _configServer->on("/scan", HTTP_GET, [this]() { handleConfigScan(); });
-  _configServer->onNotFound([this]() { handleConfigPage(); });
+  _configServer->onNotFound(renderConfigPage);
   _configServer->begin();
   _configPortalRunning = true;
   _configPortalUsesAp = false;
@@ -290,6 +300,15 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
     WiFi.softAPsetHostname(_hostname.c_str());
   }
 
+  const IPAddress apIp(192, 168, 4, 1);
+  const IPAddress apGateway(192, 168, 4, 1);
+  const IPAddress apSubnet(255, 255, 255, 0);
+  const IPAddress apDhcpLeaseStart(192, 168, 4, 2);
+  const IPAddress apDns(192, 168, 4, 1);
+  if (!WiFi.softAPConfig(apIp, apGateway, apSubnet, apDhcpLeaseStart, apDns)) {
+    Serial.println(F("[SuperOTA] Aviso: falha ao aplicar softAPConfig personalizada."));
+  }
+
   const bool hasPassword = configPass.length() > 0;
   const bool apOk = hasPassword ? WiFi.softAP(configSsid.c_str(), configPass.c_str())
                                 : WiFi.softAP(configSsid.c_str());
@@ -297,6 +316,28 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
     Serial.println(F("[SuperOTA] Falha ao abrir AP do portal."));
     return false;
   }
+  if (_safeP4Mode) {
+    delay(kSafeP4LinkStabilizeDelayMs);
+  }
+
+  uint32_t waitStartMs = millis();
+  while (!hasValidIp(WiFi.softAPIP()) && (millis() - waitStartMs) < 3000U) {
+    delay(25);
+  }
+
+  const IPAddress currentApIp = WiFi.softAPIP();
+  if (!hasValidIp(currentApIp)) {
+    Serial.println(F("[SuperOTA] AP sem IP valido para iniciar portal."));
+    return false;
+  }
+
+#if defined(ESP_IDF_VERSION) && defined(ESP_IDF_VERSION_VAL) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 2)
+  if (WiFi.AP.enableDhcpCaptivePortal()) {
+    Serial.println(F("[SuperOTA] DHCP captive portal URI habilitado."));
+  } else {
+    Serial.println(F("[SuperOTA] Aviso: nao foi possivel habilitar DHCP captive portal URI."));
+  }
+#endif
 
   if (_configServer != nullptr) {
     delete _configServer;
@@ -305,28 +346,83 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
 
   _dnsServer.stop();
   _dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-  _dnsServer.start(53, "*", WiFi.softAPIP());
+  _dnsServer.start(53, "*", currentApIp);
   _dnsRunning = true;
 
   _configServer = new WebServer(kConfigPortalPort);
-  _configServer->on("/", HTTP_GET, [this]() { handleConfigPage(); });
+  auto renderConfigPage = [this]() {
+    if (_configServer == nullptr) {
+      return;
+    }
+    if (_configServer->method() == HTTP_HEAD) {
+      _configServer->send(200, "text/html", "");
+      return;
+    }
+    handleConfigPage();
+  };
+  auto captiveProbe = [this]() {
+    if (_configServer == nullptr) {
+      return;
+    }
+    Serial.print(F("[SuperOTA] Captive probe: "));
+    Serial.println(_configServer->uri());
+    _configServer->sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    _configServer->sendHeader("Pragma", "no-cache");
+    _configServer->sendHeader("Expires", "-1");
+    if (_configServer->method() == HTTP_HEAD) {
+      _configServer->send(200, "text/plain", "");
+      return;
+    }
+    handleConfigPage();
+  };
+  _configServer->on("/", HTTP_ANY, renderConfigPage);
   _configServer->on("/save", HTTP_POST, [this]() { handleConfigSave(); });
   _configServer->on("/scan", HTTP_GET, [this]() { handleConfigScan(); });
-  _configServer->on("/generate_204", HTTP_GET, [this]() { handleConfigPage(); });
-  _configServer->on("/gen_204", HTTP_GET, [this]() { handleConfigPage(); });
-  _configServer->on("/hotspot-detect.html", HTTP_GET, [this]() { handleConfigPage(); });
-  _configServer->on("/connecttest.txt", HTTP_GET, [this]() { handleConfigPage(); });
-  _configServer->on("/ncsi.txt", HTTP_GET, [this]() { handleConfigPage(); });
-  _configServer->on("/fwlink", HTTP_GET, [this]() { handleConfigPage(); });
-  _configServer->onNotFound([this]() { handleConfigPage(); });
+  _configServer->on("/generate_204", HTTP_ANY, captiveProbe);
+  _configServer->on("/gen_204", HTTP_ANY, captiveProbe);
+  _configServer->on("/hotspot-detect.html", HTTP_ANY, captiveProbe);
+  _configServer->on("/connecttest.txt", HTTP_ANY, captiveProbe);
+  _configServer->on("/ncsi.txt", HTTP_ANY, captiveProbe);
+  _configServer->on("/fwlink", HTTP_ANY, captiveProbe);
+  _configServer->on("/redirect", HTTP_ANY, captiveProbe);
+  _configServer->on("/canonical.html", HTTP_ANY, captiveProbe);
+  _configServer->on("/success.txt", HTTP_ANY, captiveProbe);
+  _configServer->on("/success.html", HTTP_ANY, captiveProbe);
+  _configServer->on("/library/test/success.html", HTTP_ANY, captiveProbe);
+  _configServer->onNotFound(captiveProbe);
   _configServer->begin();
   _configPortalRunning = true;
   _configPortalUsesAp = true;
   _awaitingPortalModeChoice = false;
+  startMDNS();
+  if (_mdnsRunning) {
+    MDNS.addService("http", "tcp", kConfigPortalPort);
+  }
   startTelnetServer(_telnetPort);
 
   printConfigPortalEndpoints();
   return true;
+}
+
+void SuperOTA::runConfigPortalForegroundLoop() {
+  if (!_configPortalRunning || _configServer == nullptr) {
+    return;
+  }
+
+  println(F("[SuperOTA] Portal em foreground para melhor detecao captive."));
+
+  while (_configPortalRunning) {
+    processSerialCommands();
+    processTelnet();
+
+    if (_dnsRunning) {
+      _dnsServer.processNextRequest();
+    }
+    if (_configServer != nullptr) {
+      _configServer->handleClient();
+    }
+    delay(10);
+  }
 }
 
 void SuperOTA::printConfigPortalEndpoints() const {
@@ -334,6 +430,9 @@ void SuperOTA::printConfigPortalEndpoints() const {
   if (_configPortalUsesAp) {
     Serial.print(F("[SuperOTA] AP IP: http://"));
     Serial.println(WiFi.softAPIP());
+    Serial.print(F("[SuperOTA] mDNS em AP (se suportado no cliente): http://"));
+    Serial.print(_hostname);
+    Serial.println(F(".local"));
   } else {
     Serial.print(F("[SuperOTA] Station IP: http://"));
     Serial.println(WiFi.localIP());
@@ -364,6 +463,10 @@ void SuperOTA::stopConfigPortal(bool resumeAuto) {
   if (_dnsRunning) {
     _dnsServer.stop();
     _dnsRunning = false;
+  }
+  if (_mdnsRunning) {
+    MDNS.end();
+    _mdnsRunning = false;
   }
   stopTelnetServer();
 
@@ -1010,10 +1113,14 @@ void SuperOTA::processCommandLine(const String& command) {
   if (_awaitingPortalModeChoice) {
     if (command == "1") {
       println(F("[SuperOTA] Escolha 1: abrir portal no station."));
-      startConfigPortalOnStation();
+      if (startConfigPortalOnStation()) {
+        runConfigPortalForegroundLoop();
+      }
     } else if (command == "2") {
       println(F("[SuperOTA] Escolha 2: abrir portal em AP."));
-      startConfigPortalOnAccessPoint(nullptr, nullptr);
+      if (startConfigPortalOnAccessPoint(nullptr, nullptr)) {
+        runConfigPortalForegroundLoop();
+      }
     } else if (command == "config-stop") {
       _awaitingPortalModeChoice = false;
       println(F("[SuperOTA] Escolha de modo cancelada."));
@@ -1032,7 +1139,9 @@ void SuperOTA::processCommandLine(const String& command) {
       println(F("[SuperOTA] 2 = Access Point (captive portal)"));
     } else {
       println(F("[SuperOTA] Abrindo portal em AP (modo padrao)."));
-      startConfigPortalOnAccessPoint(nullptr, nullptr);
+      if (startConfigPortalOnAccessPoint(nullptr, nullptr)) {
+        runConfigPortalForegroundLoop();
+      }
     }
     return;
   }
@@ -1063,7 +1172,7 @@ void SuperOTA::handleConfigPage() {
   stationListToMultiline(stationText);
   String accessHint;
   if (_configPortalUsesAp) {
-    accessHint = String("AP: http://") + WiFi.softAPIP().toString();
+    accessHint = String("AP: http://") + WiFi.softAPIP().toString() + " (mDNS opcional: http://" + _hostname + ".local)";
   } else {
     accessHint = String("Station: http://") + _hostname + ".local (ou http://" + WiFi.localIP().toString() + ")";
   }
@@ -1077,11 +1186,19 @@ void SuperOTA::handleConfigPage() {
         "box-shadow:0 14px 26px rgba(0,0,0,.35);}h1{margin:0 0 10px 0;}p{color:#b8c9f0;line-height:1.45;}"
         "label{display:block;font-weight:700;margin:12px 0 4px;}input,textarea{width:100%;padding:10px;"
         "border:1px solid #32456c;border-radius:8px;background:#0f1a2e;color:#eaf0ff;}textarea{min-height:140px;}"
-        "button{margin-top:14px;padding:11px 14px;border:0;border-radius:8px;background:#315ea8;"
+        "button{margin-top:0;padding:11px 14px;border:0;border-radius:8px;background:#315ea8;"
         "color:#fff;font-weight:700;cursor:pointer;}button:hover{background:#3d74cc;}"
         "small{color:#9eb5e8;}a{color:#7db7ff;}code{background:#0f1a2e;border:1px solid #32456c;padding:1px 6px;"
         "border-radius:6px;}.hint{padding:10px 12px;border-radius:8px;background:#0f1a2e;border:1px solid #32456c;"
-        "margin:10px 0 6px 0;}</style></head><body><main>");
+        "margin:10px 0 6px 0;}.check-row{display:flex;align-items:center;justify-content:space-between;"
+        "gap:12px;margin:14px 0 6px 0;}.check-row .text{font-weight:700;color:#eaf0ff;}"
+        ".check-row input[type=checkbox]{appearance:none;width:20px;height:20px;flex:0 0 auto;margin:0;"
+        "border:1px solid #4f6ea8;border-radius:6px;background:#0f1a2e;cursor:pointer;position:relative;}"
+        ".check-row input[type=checkbox]:checked{background:#315ea8;border-color:#5f84c8;}"
+        ".check-row input[type=checkbox]:checked::after{content:'';position:absolute;left:6px;top:2px;"
+        "width:5px;height:10px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg);}"
+        ".form-footer{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px;}"
+        ".form-footer small{margin:0;}</style></head><body><main>");
 
   html += F("<h1>SuperOTA - Configuracao</h1><p>Edite os campos e clique em salvar. "
             "Formato da lista station: uma rede por linha em <code>SSID;senha</code>.</p>");
@@ -1095,11 +1212,11 @@ void SuperOTA::handleConfigPage() {
   html += htmlEscape(_hostname);
   html += F("'/>\n");
 
-  html += F("<label><input type='checkbox' name='preferAP' ");
+  html += F("<label class='check-row'><span class='text'>Iniciar priorizando Access Point</span><input type='checkbox' name='preferAP' ");
   if (_preferAccessPoint) {
     html += F("checked");
   }
-  html += F("/> Iniciar priorizando Access Point</label>");
+  html += F("/></label>");
 
   html += F("<label>AP SSID</label><input name='apSsid' value='");
   html += htmlEscape(_apSsid);
@@ -1112,9 +1229,7 @@ void SuperOTA::handleConfigPage() {
   html += F("<label>Lista Station</label><textarea name='stationList'>");
   html += htmlEscape(stationText);
   html += F("</textarea>");
-  html += F("<small>Exemplo: MinhaCasa;senha123</small>");
-
-  html += F("<button type='submit'>Salvar e aplicar</button></form>");
+  html += F("<div class='form-footer'><small>Exemplo: MinhaCasa;senha123</small><button type='submit'>Salvar e aplicar</button></div></form>");
   html += F("</main></body></html>");
 
   _configServer->send(200, "text/html", html);

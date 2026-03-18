@@ -47,6 +47,39 @@ SuperOTA/
 - Core Arduino para ESP32
 - Bibliotecas do core: `WiFi`, `ArduinoOTA`, `ESPmDNS`, `Preferences`, `WebServer`, `DNSServer`
 
+## PlatformIO.ini (obrigatorio para OTA + serial Wi-Fi)
+
+Use este bloco como base no seu `platformio.ini`:
+
+```ini
+[env:esp32-p4-evboard]
+platform = https://github.com/pioarduino/platform-espressif32.git
+board = esp32-p4-evboard
+framework = arduino
+
+build_flags =
+  -D ARDUINO_USB_CDC_ON_BOOT=0
+  -D CORE_DEBUG_LEVEL=0
+
+; Upload OTA de firmware (ArduinoOTA)
+upload_protocol = espota
+upload_port = superota.local
+upload_flags =
+  --port=3232
+
+; Monitor serial sem fio (Telnet SuperOTA)
+monitor_speed = 115200
+monitor_port = socket://superota.local:23
+```
+
+Importante:
+
+- `upload_protocol`, `upload_port` e `upload_flags` **nao** podem ter espaco no inicio da linha.
+- Se essas chaves ficarem indentadas, o PlatformIO pode tratar como `build_flags`, gerando erros como:
+  - `unrecognized command-line option '--port=3232'`
+  - erros de linker com `cannot find -l...upload_protocol` etc.
+- Para usar serial USB local, troque para `monitor_port = COMx`.
+
 ## Fluxo inteligente de station
 
 Quando existem redes station cadastradas:
@@ -76,6 +109,12 @@ Quando aberto em station, a pagina fica disponivel em:
 - porta HTTP: `80`
 
 Quando aberto em AP, a biblioteca sobe um AP de setup com captive portal (DNS catch-all) para abrir a pagina automaticamente apos conectar.
+
+Comportamento em AP:
+
+- URL principal recomendada: `http://192.168.4.1` (ou IP que o AP informar no serial).
+- `http://hostname.local` em AP depende de suporte mDNS do cliente/rede e pode nao resolver em todos os celulares/PCs.
+- A biblioteca responde endpoints de captive portal (`/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`, etc.) com redirecionamento para aumentar a chance de autoabertura.
 
 Sobre serial:
 

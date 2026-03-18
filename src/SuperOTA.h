@@ -118,6 +118,7 @@ private:
   void processCommandLine(const String& command);
   bool startConfigPortalOnStation();
   bool startConfigPortalOnAccessPoint(const char* apSsid, const char* apPassword);
+  void runConfigPortalForegroundLoop();
   void printConfigPortalEndpoints() const;
   void broadcastRaw(const char* message);
   void handleConfigPage();
