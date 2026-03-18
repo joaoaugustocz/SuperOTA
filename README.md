@@ -46,6 +46,10 @@ SuperOTA/
       StationListWithSerialConfig.ino
     PersistenceWithFactoryReset/
       PersistenceWithFactoryReset.ino
+    FreeRTOSBasic/
+      FreeRTOSBasic.ino
+    FreeRTOSOtaServiceQueue/
+      FreeRTOSOtaServiceQueue.ino
 ```
 
 ## Requisitos
@@ -119,6 +123,33 @@ Padrao recomendado no `setup()`:
 3. `savePreferences()` apenas nesse primeiro setup
 
 Isso evita sobrescrever no boot o que foi salvo via portal.
+
+## Uso com FreeRTOS (SO)
+
+Abordagens possiveis:
+
+1. `ota.loop()` no `loop()` Arduino + tasks FreeRTOS para aplicacao.
+2. Task dedicada para OTA/rede chamando `ota.loop()` periodicamente.
+3. Servico OTA com fila de comandos (task unica dona da biblioteca).
+4. (Opcional) fixar tasks por core em chips multicore.
+
+Recomendacao:
+
+- Comece pela abordagem 2.
+- Em projeto de producao, evolua para abordagem 3 (fila), pois reduz risco de concorrencia.
+
+Regras praticas para evitar race condition:
+
+- Defina uma task "dona" da `SuperOTA` em runtime.
+- Evite chamar metodos da biblioteca a partir de multiplas tasks ao mesmo tempo.
+- Se outra task precisar acionar OTA/portal/debug, envie comando por fila para a task dona.
+- Nao tenha duas tasks lendo `Serial` em paralelo sem coordenacao.
+
+Timing e prioridade sugeridos:
+
+- Chamar `ota.loop()` a cada `5-20ms`.
+- Task OTA com prioridade maior que tarefas de baixa criticidade (ex.: OTA = 3, app = 1-2).
+- Evite blocos longos na task dona da OTA.
 
 ## Portal de configuracao
 
@@ -222,6 +253,26 @@ Comandos extras desse exemplo:
 
 - `nvs-status` -> mostra estado basico salvo
 - `nvs-clear` -> limpa NVS e reinicia (simula reset de fabrica)
+
+### 5) FreeRTOS basico (task dedicada OTA)
+
+Use [examples/FreeRTOSBasic/FreeRTOSBasic.ino](examples/FreeRTOSBasic/FreeRTOSBasic.ino)
+
+Esse exemplo mostra:
+
+- task dedicada para `ota.loop()`;
+- task separada de aplicacao;
+- uso de `configota` mantendo arquitetura simples com SO.
+
+### 6) FreeRTOS com servico OTA + fila (producao)
+
+Use [examples/FreeRTOSOtaServiceQueue/FreeRTOSOtaServiceQueue.ino](examples/FreeRTOSOtaServiceQueue/FreeRTOSOtaServiceQueue.ino)
+
+Esse exemplo mostra:
+
+- task OTA como servico unico (ownership da biblioteca);
+- task de console enviando comandos por fila;
+- comandos: `portal-ap`, `portal-stop`, `debug-on`, `debug-off`, `debug-summary`, `status`.
 
 ## API publica
 

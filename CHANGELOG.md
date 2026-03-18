@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.8 - 2026-03-18
+- Novos exemplos FreeRTOS:
+  - `FreeRTOSBasic` (task dedicada para `ota.loop()` + task de aplicacao).
+  - `FreeRTOSOtaServiceQueue` (servico OTA com fila de comandos entre tasks).
+- README atualizado com secao dedicada de uso com SO/FreeRTOS:
+  - abordagens recomendadas;
+  - regras de ownership/thread-safety;
+  - sugestoes de prioridade e periodicidade de `ota.loop()`.
+
 ## 1.1.7 - 2026-03-18
 - Correcao de metadados de autoria para `João Augusto Carvalho Araújo`:
   - `library.properties` (`author` e `maintainer`);
