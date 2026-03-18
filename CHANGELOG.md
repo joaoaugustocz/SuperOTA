@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.6 - 2026-03-18
+- README expandido com secao dedicada de persistencia NVS apos reboot e update OTA.
+- Exemplos `BasicStationOrAP` e `StationListWithSerialConfig` atualizados para o padrao seguro:
+  - `loadPreferences()` primeiro;
+  - defaults apenas quando NVS estiver vazia;
+  - evitar sobrescrever configuracao salva no portal.
+- Novo exemplo `PersistenceWithFactoryReset` com comandos:
+  - `nvs-status` para diagnostico rapido;
+  - `nvs-clear` para limpar NVS e reiniciar.
+
 ## 1.1.5 - 2026-03-18
 - Novo modo de debug com metricas de AP/captive portal:
   - API publica: `enableDebugMetrics`, `setDebugSummaryIntervalMs`, `printDebugSummary`.

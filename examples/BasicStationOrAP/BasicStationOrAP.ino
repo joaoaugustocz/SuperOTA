@@ -4,11 +4,12 @@ SuperOTA ota;
 
 void setup() {
   ota.beginSerial(115200);
+  ota.enableSerialConfigCommand(true, "configota");
 
-  // Opcional: carrega ultimo perfil salvo na NVS.
+  // Carrega o perfil salvo no portal/configuracao anterior.
   ota.loadPreferences();
 
-  // Se nao houver credenciais salvas, define um perfil inicial.
+  // Define defaults apenas quando a NVS ainda nao possui redes station.
   if (!ota.hasStationCredentials()) {
     ota.clearStationNetworks();
     ota.addStationNetwork("MinhaRede", "MinhaSenha");
@@ -16,13 +17,18 @@ void setup() {
     ota.setAccessPointCredentials("SuperOTA-Recovery", "12345678");
     ota.setHostname("superota-no1");
     ota.setPreferAccessPoint(false);  // tenta station antes de AP
-    ota.enableSerialConfigCommand(true, "configota");
     ota.savePreferences();
+    Serial.println("[APP] Perfil inicial salvo na NVS.");
+  } else {
+    Serial.println("[APP] Perfil carregado da NVS.");
   }
 
   if (!ota.begin()) {
     Serial.println("[APP] Falha ao iniciar OTA.");
   }
+
+  Serial.println("[APP] Use 'configota' para editar e salvar configuracoes.");
+  Serial.println("[APP] As configuracoes permanecem apos reboot e OTA.");
 }
 
 void loop() {

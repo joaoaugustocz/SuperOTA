@@ -44,6 +44,8 @@ SuperOTA/
       BasicAccessPointOnly.ino
     StationListWithSerialConfig/
       StationListWithSerialConfig.ino
+    PersistenceWithFactoryReset/
+      PersistenceWithFactoryReset.ino
 ```
 
 ## Requisitos
@@ -95,6 +97,28 @@ Quando existem redes station cadastradas:
 4. Se nao encontrar nenhuma, faz fallback para AP (dependendo da configuracao).
 
 Toda a decisao e impressa via `Serial`.
+
+## Persistencia apos reboot e update
+
+Resumo direto:
+
+- Sim, o que voce salva no `configota` fica na NVS.
+- Reiniciar ou cortar energia nao apaga essas configuracoes.
+- Update OTA de firmware normalmente tambem nao apaga NVS.
+
+Quando pode perder dados:
+
+- se o firmware chamar `clearPreferences()`;
+- se voce fizer erase total de flash;
+- se houver mudanca de tabela de particoes que remova/altere NVS.
+
+Padrao recomendado no `setup()`:
+
+1. `loadPreferences()`
+2. se nao houver dados (`!hasStationCredentials()`), aplicar defaults
+3. `savePreferences()` apenas nesse primeiro setup
+
+Isso evita sobrescrever no boot o que foi salvo via portal.
 
 ## Portal de configuracao
 
@@ -184,6 +208,20 @@ Use [examples/BasicStationOrAP/BasicStationOrAP.ino](examples/BasicStationOrAP/B
 ### 3) Lista station + portal serial
 
 Use [examples/StationListWithSerialConfig/StationListWithSerialConfig.ino](examples/StationListWithSerialConfig/StationListWithSerialConfig.ino)
+
+Esse exemplo ja segue o padrao de persistencia segura:
+
+- carrega NVS primeiro;
+- grava defaults somente quando NVS estiver vazia.
+
+### 4) Persistencia + reset de fabrica da NVS
+
+Use [examples/PersistenceWithFactoryReset/PersistenceWithFactoryReset.ino](examples/PersistenceWithFactoryReset/PersistenceWithFactoryReset.ino)
+
+Comandos extras desse exemplo:
+
+- `nvs-status` -> mostra estado basico salvo
+- `nvs-clear` -> limpa NVS e reinicia (simula reset de fabrica)
 
 ## API publica
 
