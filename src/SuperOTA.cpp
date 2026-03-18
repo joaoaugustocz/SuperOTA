@@ -350,8 +350,72 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
   _dnsRunning = true;
 
   _configServer = new WebServer(kConfigPortalPort);
-  auto renderConfigPage = [this]() {
+  const String apIpText = currentApIp.toString();
+  String mdnsHost = _hostname;
+  mdnsHost += F(".local");
+  mdnsHost.toLowerCase();
+
+  auto normalizeHost = [](String host) {
+    host.trim();
+    host.toLowerCase();
+    const int colonPos = host.indexOf(':');
+    if (colonPos >= 0) {
+      host = host.substring(0, colonPos);
+    }
+    return host;
+  };
+
+  auto isIpv4Host = [](const String& host) {
+    if (host.isEmpty()) {
+      return false;
+    }
+    uint8_t dots = 0;
+    for (size_t i = 0; i < host.length(); ++i) {
+      const char c = host[i];
+      if (c == '.') {
+        ++dots;
+        continue;
+      }
+      if (c < '0' || c > '9') {
+        return false;
+      }
+    }
+    return dots == 3;
+  };
+
+  const String normalizedApIp = normalizeHost(apIpText);
+  auto isPortalHost = [normalizeHost, isIpv4Host, normalizedApIp, mdnsHost](const String& rawHost) {
+    const String host = normalizeHost(rawHost);
+    if (host.isEmpty()) {
+      return true;
+    }
+    if (host == F("localhost")) {
+      return true;
+    }
+    if (host == normalizedApIp || host == mdnsHost) {
+      return true;
+    }
+    return isIpv4Host(host);
+  };
+
+  auto sendCaptiveRedirect = [this, apIpText]() {
     if (_configServer == nullptr) {
+      return;
+    }
+    const String location = String("http://") + apIpText + "/";
+    _configServer->sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    _configServer->sendHeader("Pragma", "no-cache");
+    _configServer->sendHeader("Expires", "-1");
+    _configServer->sendHeader("Location", location, true);
+    _configServer->send(302, "text/plain", "redirect");
+  };
+
+  auto renderConfigPage = [this, isPortalHost, sendCaptiveRedirect]() {
+    if (_configServer == nullptr) {
+      return;
+    }
+    if (!isPortalHost(_configServer->hostHeader())) {
+      sendCaptiveRedirect();
       return;
     }
     if (_configServer->method() == HTTP_HEAD) {
@@ -360,20 +424,18 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
     }
     handleConfigPage();
   };
-  auto captiveProbe = [this]() {
+  auto captiveProbe = [this, sendCaptiveRedirect]() {
     if (_configServer == nullptr) {
       return;
     }
     Serial.print(F("[SuperOTA] Captive probe: "));
+    Serial.print(_configServer->hostHeader());
+    Serial.print(F(" "));
     Serial.println(_configServer->uri());
     _configServer->sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     _configServer->sendHeader("Pragma", "no-cache");
     _configServer->sendHeader("Expires", "-1");
-    if (_configServer->method() == HTTP_HEAD) {
-      _configServer->send(200, "text/plain", "");
-      return;
-    }
-    handleConfigPage();
+    sendCaptiveRedirect();
   };
   _configServer->on("/", HTTP_ANY, renderConfigPage);
   _configServer->on("/save", HTTP_POST, [this]() { handleConfigSave(); });
