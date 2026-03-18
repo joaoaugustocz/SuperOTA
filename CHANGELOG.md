@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.7 - 2026-03-18
+- Correcao de metadados de autoria para `João Augusto Carvalho Araújo`:
+  - `library.properties` (`author` e `maintainer`);
+  - `library.json` (`authors`);
+  - `LICENSE` (copyright).
+
 ## 1.1.6 - 2026-03-18
 - README expandido com secao dedicada de persistencia NVS apos reboot e update OTA.
 - Exemplos `BasicStationOrAP` e `StationListWithSerialConfig` atualizados para o padrao seguro:
