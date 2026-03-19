@@ -118,6 +118,7 @@ SuperOTA::SuperOTA()
       _deferredPortalStop(false),
       _deferredPortalResumeAuto(true),
       _deferredPortalStopAfterMs(0),
+      _deferredPortalRestart(false),
       _dnsServer(),
       _dnsRunning(false),
       _prefs() {}
@@ -793,9 +794,19 @@ void SuperOTA::handleDeferredPortalStop() {
   }
 
   const bool resumeAuto = _deferredPortalResumeAuto;
+  const bool restartAfterSave = _deferredPortalRestart;
   _deferredPortalStop = false;
   _deferredPortalResumeAuto = true;
   _deferredPortalStopAfterMs = 0U;
+  _deferredPortalRestart = false;
+
+  if (restartAfterSave) {
+    println(F("[SuperOTA] Aplicando configuracoes com reinicio seguro."));
+    delay(180);
+    ESP.restart();
+    return;
+  }
+
   stopConfigPortal(resumeAuto);
 }
 
@@ -838,6 +849,7 @@ void SuperOTA::stopConfigPortal(bool resumeAuto) {
   _deferredPortalStop = false;
   _deferredPortalResumeAuto = true;
   _deferredPortalStopAfterMs = 0U;
+  _deferredPortalRestart = false;
 
   if (_dnsRunning) {
     _dnsServer.stop();
@@ -1347,7 +1359,6 @@ void SuperOTA::startMDNS() {
 
   if (MDNS.begin(_hostname.c_str())) {
     _mdnsRunning = true;
-    MDNS.addService("arduino", "tcp", kArduinoOtaPort);
     print(F("[SuperOTA] mDNS ativo em "));
     print(_hostname);
     println(F(".local"));
@@ -1697,6 +1708,7 @@ void SuperOTA::handleConfigSave() {
   _configServer->send(200, "text/html", response);
   _deferredPortalResumeAuto = true;
   _deferredPortalStopAfterMs = millis() + kConfigPortalDeferredStopMs;
+  _deferredPortalRestart = _safeP4Mode && kBuildTargetIsP4;
   _deferredPortalStop = true;
 }
 
