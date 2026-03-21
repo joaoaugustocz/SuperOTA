@@ -10,7 +10,9 @@ Subbiblioteca extraida da `Baratinha` com foco exclusivo em OTA para ESP32.
   - hostname;
   - preferencia de inicializacao (STA/AP);
   - credenciais AP;
-  - lista de redes station.
+  - lista de redes station;
+  - senha OTA;
+  - senha do portal.
 - Entrada no portal por comando serial (default: `configota`).
 - Modo debug sob demanda para metricas de captive portal/AP.
 
@@ -167,6 +169,7 @@ Quando aberto em station, a pagina fica disponivel em:
 - `http://hostname.local`
 - `http://<ip_station>`
 - porta HTTP: `80`
+- login HTTP Basic quando senha de portal estiver ativa (`usuario: admin`)
 
 Quando aberto em AP, a biblioteca sobe um AP de setup com captive portal (DNS catch-all) para abrir a pagina automaticamente apos conectar.
 
@@ -184,6 +187,19 @@ Diagnostico rapido quando nao abre automaticamente:
 - Esqueca a rede AP no celular/PC e conecte novamente.
 - Acesso manual sempre funciona em `http://192.168.4.1`.
 
+Validar rapidamente se voce esta na pagina mais recente:
+
+- No rodape da pagina existe um carimbo `SuperOTA v... | ui-... | build ...`.
+- Esse carimbo ajuda a confirmar que o firmware novo subiu e que o navegador nao esta mostrando cache antigo.
+
+Se o PlatformIO usar cache de biblioteca local antiga:
+
+```powershell
+pio pkg install -d . -e <seu-env> --library "file://<caminho-absoluto-da-SuperOTA>" --force
+pio run -t clean
+pio run -t upload
+```
+
 Sobre serial:
 
 - comandos (`configota`, `1`, `2`, etc.) podem ser enviados por:
@@ -196,6 +212,55 @@ Mapa rapido de portas:
 - OTA (upload de firmware): porta `3232` (ArduinoOTA / espota)
 - Serial sem fio (Telnet): porta `23`
 - Serial USB local: COMx
+
+## Seguranca OTA e portal
+
+A biblioteca agora suporta dois niveis de senha:
+
+- senha OTA (upload de firmware na porta `3232`);
+- senha do portal de configuracao (HTTP Basic, usuario fixo `admin`).
+
+No portal voce pode escolher:
+
+- usar a mesma senha OTA para proteger o portal; ou
+- usar uma senha separada so para o portal.
+
+Comportamento dos campos de senha no portal:
+
+- se deixar o campo vazio, a senha atual e mantida;
+- para trocar, informe a nova senha e clique em salvar.
+
+API de seguranca:
+
+- `void setOtaPassword(const char* password)`
+- `bool otaPasswordEnabled() const`
+- `void setPortalPassword(const char* password)`
+- `void setUseOtaPasswordForPortal(bool enable)`
+- `bool usingOtaPasswordForPortal() const`
+- `bool portalPasswordEnabled() const`
+
+Exemplo rapido (senha unica OTA + portal):
+
+```cpp
+ota.setOtaPassword("TroquePorSenhaForte123!");
+ota.setUseOtaPasswordForPortal(true);
+```
+
+Exemplo rapido (senha separada para portal):
+
+```cpp
+ota.setOtaPassword("TroquePorSenhaForte123!");
+ota.setUseOtaPasswordForPortal(false);
+ota.setPortalPassword("OutraSenhaPortal456!");
+```
+
+Padrao recomendado ("ouro"):
+
+1. usar senha forte no OTA (12+ caracteres aleatorios);
+2. manter o portal fechado na maior parte do tempo (abrir apenas sob comando);
+3. proteger o AP de configuracao com WPA2 quando possivel;
+4. usar rede confiavel para update (OTA e Basic Auth nao usam TLS por padrao);
+5. desativar Telnet em campo quando nao for necessario.
 
 ## Modo debug de metricas
 
@@ -274,6 +339,17 @@ Esse exemplo mostra:
 - task de console enviando comandos por fila;
 - comandos: `portal-ap`, `portal-stop`, `debug-on`, `debug-off`, `debug-summary`, `status`.
 
+### 7) Seguranca OTA + senha no portal
+
+Use [examples/SecurityOtaAndPortalPassword/SecurityOtaAndPortalPassword.ino](examples/SecurityOtaAndPortalPassword/SecurityOtaAndPortalPassword.ino)
+
+Esse exemplo mostra:
+
+- senha obrigatoria para upload OTA;
+- portal protegido por senha (`admin` + senha);
+- duas estrategias: senha unica (OTA + portal) ou senha separada;
+- persistencia dessas configuracoes na NVS.
+
 ## API publica
 
 ### Configuracao
@@ -302,6 +378,12 @@ Esse exemplo mostra:
 - `bool telnetSerialEnabled() const`
 - `uint16_t telnetPort() const`
 - `bool telnetClientConnected()`
+- `void setOtaPassword(const char* password)`
+- `bool otaPasswordEnabled() const`
+- `void setPortalPassword(const char* password)`
+- `void setUseOtaPasswordForPortal(bool enable)`
+- `bool usingOtaPasswordForPortal() const`
+- `bool portalPasswordEnabled() const`
 - `void enableSerialConfigCommand(bool enable = true, const char* command = "configota")`
 - `bool startConfigPortal(const char* apSsid = nullptr, const char* apPassword = nullptr)`
 - `void stopConfigPortal(bool resumeAuto = true)`
@@ -339,6 +421,9 @@ Chaves:
 - `apSsid`
 - `apPass`
 - `hostname`
+- `otaPass`
+- `portalPass`
+- `portalUseOta`
 
 ## Modo seguro P4 + C6
 
@@ -356,6 +441,7 @@ Em outros targets, esse modo nao altera o comportamento padrao.
 - Mantenha AP senha com 8+ caracteres (ou vazio para aberto).
 - Defina prioridade das redes station na ordem de insercao.
 - Use `savePreferences()` apos alterar configuracoes no codigo.
+- Para producao, ative senha OTA e senha no portal.
 
 ## Licenca
 

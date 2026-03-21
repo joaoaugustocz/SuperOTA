@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.2.1 - 2026-03-21
+- Portal de configuracao:
+  - refinamento visual dos icones de senha (olho/olho riscado) com estilo mais minimalista;
+  - melhor alinhamento do icone de visualizacao dentro dos campos de senha;
+  - carimbo visual no rodape com versao da biblioteca + revisao de UI + data/hora de build, para facilitar validacao de cache.
+- Documentacao:
+  - README atualizado com orientacao para forcar refresh da biblioteca local no PlatformIO (`pkg install --force`) quando necessario.
+
+## 1.2.0 - 2026-03-20
+- Seguranca OTA + portal:
+  - nova API: `setOtaPassword`, `otaPasswordEnabled`.
+  - nova API: `setPortalPassword`, `setUseOtaPasswordForPortal`, `usingOtaPasswordForPortal`, `portalPasswordEnabled`.
+  - `configureOTAHandlers()` agora aplica senha OTA quando configurada.
+  - portal de configuracao agora pode exigir autenticacao HTTP Basic (`admin` + senha configurada).
+  - protecao aplicada em `/`, `/save`, `/scan` e fluxo principal do portal.
+- Portal web:
+  - novos campos para definir senha OTA, definir senha do portal e escolher reutilizar a senha OTA no portal.
+  - campos de senha vazios mantem os valores ja configurados.
+- Persistencia NVS:
+  - novas chaves `otaPass`, `portalPass`, `portalUseOta`.
+- README atualizado com secao de seguranca e API nova.
+- Novo exemplo `SecurityOtaAndPortalPassword` para validar senha OTA e autenticacao do portal.
+
 ## 1.1.9 - 2026-03-18
 - Correcao de estabilidade no fechamento do portal:
   - `handleConfigSave()` agora agenda o fechamento do portal para o proximo ciclo de `loop()`, em vez de chamar `stopConfigPortal(true)` dentro do callback HTTP.

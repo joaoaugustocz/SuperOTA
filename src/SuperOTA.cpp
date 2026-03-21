@@ -18,11 +18,16 @@ constexpr char kPrefStaList[] = "staList";
 constexpr char kPrefApSsid[] = "apSsid";
 constexpr char kPrefApPass[] = "apPass";
 constexpr char kPrefHostname[] = "hostname";
+constexpr char kPrefOtaPass[] = "otaPass";
+constexpr char kPrefPortalPass[] = "portalPass";
+constexpr char kPrefPortalUseOta[] = "portalUseOta";
 constexpr uint8_t kSafeP4ConnectAttempts = 2;
 constexpr uint16_t kSafeP4RetryDelayMs = 250;
 constexpr uint16_t kSafeP4LinkStabilizeDelayMs = 120;
 constexpr uint16_t kConfigPortalPort = 80;
 constexpr uint16_t kConfigPortalDeferredStopMs = 1200;
+constexpr char kSuperOtaVersion[] = "1.2.1";
+constexpr char kConfigUiRevision[] = "ui-2026-03-21-eye-minimal-v1";
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 constexpr bool kBuildTargetIsP4 = true;
@@ -93,6 +98,9 @@ SuperOTA::SuperOTA()
       _apSsid(kDefaultApSsid),
       _apPassword(kDefaultApPassword),
       _hostname(kDefaultHostname),
+      _otaPassword(""),
+      _portalPassword(""),
+      _useOtaPasswordForPortal(true),
       _preferAccessPoint(false),
       _safeP4Mode(kBuildTargetIsP4),
       _debugMetricsEnabled(false),
@@ -475,6 +483,50 @@ bool SuperOTA::telnetClientConnected() {
   return _telnetEnabled && _telnetClient.connected();
 }
 
+void SuperOTA::setOtaPassword(const char* password) {
+  if (password == nullptr || password[0] == '\0') {
+    return;
+  }
+
+  const String newPassword(password);
+  if (_otaPassword == newPassword) {
+    return;
+  }
+
+  _otaPassword = newPassword;
+  println(F("[SuperOTA] Senha OTA configurada."));
+
+  if (_configured) {
+    configureOTAHandlers();
+    ArduinoOTA.begin();
+  }
+}
+
+bool SuperOTA::otaPasswordEnabled() const {
+  return _otaPassword.length() > 0;
+}
+
+void SuperOTA::setPortalPassword(const char* password) {
+  if (password == nullptr || password[0] == '\0') {
+    return;
+  }
+
+  _portalPassword = String(password);
+  println(F("[SuperOTA] Senha do portal configurada."));
+}
+
+void SuperOTA::setUseOtaPasswordForPortal(bool enable) {
+  _useOtaPasswordForPortal = enable;
+}
+
+bool SuperOTA::usingOtaPasswordForPortal() const {
+  return _useOtaPasswordForPortal;
+}
+
+bool SuperOTA::portalPasswordEnabled() const {
+  return effectivePortalPassword().length() > 0;
+}
+
 void SuperOTA::enableSerialConfigCommand(bool enable, const char* command) {
   _serialConfigEnabled = enable;
 
@@ -491,6 +543,31 @@ void SuperOTA::enableSerialConfigCommand(bool enable, const char* command) {
 
 bool SuperOTA::startConfigPortal(const char* apSsid, const char* apPassword) {
   return startConfigPortalOnAccessPoint(apSsid, apPassword);
+}
+
+String SuperOTA::effectivePortalPassword() const {
+  if (_useOtaPasswordForPortal && _otaPassword.length() > 0) {
+    return _otaPassword;
+  }
+  return _portalPassword;
+}
+
+bool SuperOTA::ensurePortalAuthentication() {
+  if (_configServer == nullptr) {
+    return false;
+  }
+
+  const String password = effectivePortalPassword();
+  if (password.isEmpty()) {
+    return true;
+  }
+
+  if (_configServer->authenticate("admin", password.c_str())) {
+    return true;
+  }
+
+  _configServer->requestAuthentication();
+  return false;
 }
 
 bool SuperOTA::startConfigPortalOnStation() {
@@ -518,6 +595,9 @@ bool SuperOTA::startConfigPortalOnStation() {
     if (_configServer == nullptr) {
       return;
     }
+    if (!ensurePortalAuthentication()) {
+      return;
+    }
     if (_configServer->method() == HTTP_HEAD) {
       _configServer->send(200, "text/html", "");
       return;
@@ -525,8 +605,18 @@ bool SuperOTA::startConfigPortalOnStation() {
     handleConfigPage();
   };
   _configServer->on("/", HTTP_ANY, renderConfigPage);
-  _configServer->on("/save", HTTP_POST, [this]() { handleConfigSave(); });
-  _configServer->on("/scan", HTTP_GET, [this]() { handleConfigScan(); });
+  _configServer->on("/save", HTTP_POST, [this]() {
+    if (!ensurePortalAuthentication()) {
+      return;
+    }
+    handleConfigSave();
+  });
+  _configServer->on("/scan", HTTP_GET, [this]() {
+    if (!ensurePortalAuthentication()) {
+      return;
+    }
+    handleConfigScan();
+  });
   _configServer->onNotFound(renderConfigPage);
   _configServer->begin();
   _configPortalRunning = true;
@@ -708,6 +798,9 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
       sendCaptiveRedirect();
       return;
     }
+    if (!ensurePortalAuthentication()) {
+      return;
+    }
     if (_configServer->method() == HTTP_HEAD) {
       _configServer->send(200, "text/html", "");
       return;
@@ -730,8 +823,18 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
     sendCaptiveRedirect();
   };
   _configServer->on("/", HTTP_ANY, renderConfigPage);
-  _configServer->on("/save", HTTP_POST, [this]() { handleConfigSave(); });
-  _configServer->on("/scan", HTTP_GET, [this]() { handleConfigScan(); });
+  _configServer->on("/save", HTTP_POST, [this]() {
+    if (!ensurePortalAuthentication()) {
+      return;
+    }
+    handleConfigSave();
+  });
+  _configServer->on("/scan", HTTP_GET, [this]() {
+    if (!ensurePortalAuthentication()) {
+      return;
+    }
+    handleConfigScan();
+  });
   _configServer->on("/generate_204", HTTP_ANY, captiveProbe);
   _configServer->on("/gen_204", HTTP_ANY, captiveProbe);
   _configServer->on("/hotspot-detect.html", HTTP_ANY, captiveProbe);
@@ -829,6 +932,16 @@ void SuperOTA::printConfigPortalEndpoints() const {
   }
   Serial.print(F("[SuperOTA] Porta HTTP do portal: "));
   Serial.println(kConfigPortalPort);
+  if (portalPasswordEnabled()) {
+    Serial.println(F("[SuperOTA] Portal protegido por senha (usuario: admin)."));
+  } else {
+    Serial.println(F("[SuperOTA] Portal sem senha."));
+  }
+  if (otaPasswordEnabled()) {
+    Serial.println(F("[SuperOTA] OTA protegido por senha."));
+  } else {
+    Serial.println(F("[SuperOTA] OTA sem senha."));
+  }
   if (_telnetEnabled) {
     Serial.print(F("[SuperOTA] Telnet serial: socket://"));
     Serial.print(_hostname);
@@ -1066,6 +1179,9 @@ bool SuperOTA::loadPreferences() {
   _apSsid = _prefs.getString(kPrefApSsid, _apSsid);
   _apPassword = _prefs.getString(kPrefApPass, _apPassword);
   _hostname = normalizeHostname(_prefs.getString(kPrefHostname, _hostname).c_str());
+  _otaPassword = _prefs.getString(kPrefOtaPass, _otaPassword);
+  _portalPassword = _prefs.getString(kPrefPortalPass, _portalPassword);
+  _useOtaPasswordForPortal = _prefs.getBool(kPrefPortalUseOta, _useOtaPasswordForPortal);
 
   clearStationNetworks();
   const String listRaw = _prefs.getString(kPrefStaList, "");
@@ -1101,6 +1217,9 @@ bool SuperOTA::savePreferences() {
   _prefs.putString(kPrefApSsid, _apSsid);
   _prefs.putString(kPrefApPass, _apPassword);
   _prefs.putString(kPrefHostname, _hostname);
+  _prefs.putString(kPrefOtaPass, _otaPassword);
+  _prefs.putString(kPrefPortalPass, _portalPassword);
+  _prefs.putBool(kPrefPortalUseOta, _useOtaPasswordForPortal);
 
   // Backward compatibility keys (first station network only).
   const String firstSsid = (_stationCount > 0) ? _stationSsids[0] : String();
@@ -1129,6 +1248,9 @@ bool SuperOTA::clearPreferences() {
 
   if (cleared) {
     clearStationNetworks();
+    _otaPassword = "";
+    _portalPassword = "";
+    _useOtaPasswordForPortal = true;
   }
 
   Serial.println(cleared ? F("[SuperOTA] Preferencias removidas.")
@@ -1331,6 +1453,9 @@ bool SuperOTA::beginAccessPointOnce(const char* ssid, const char* password) {
 void SuperOTA::configureOTAHandlers() {
   ArduinoOTA.setPort(kArduinoOtaPort);
   ArduinoOTA.setHostname(_hostname.c_str());
+  if (_otaPassword.length() > 0) {
+    ArduinoOTA.setPassword(_otaPassword.c_str());
+  }
 
   ArduinoOTA.onStart([this]() {
     this->println(F("[SuperOTA] OTA start."));
@@ -1611,6 +1736,11 @@ void SuperOTA::handleConfigPage() {
 
   String stationText;
   stationListToMultiline(stationText);
+  const bool otaSecured = otaPasswordEnabled();
+  const bool portalSecured = portalPasswordEnabled();
+  const bool portalUsesOtaPassword = usingOtaPasswordForPortal();
+  const String configUiStamp =
+      String("SuperOTA v") + kSuperOtaVersion + " | " + kConfigUiRevision + " | build " + __DATE__ + " " + __TIME__;
   String accessHint;
   if (_configPortalUsesAp) {
     accessHint = String("AP: http://") + WiFi.softAPIP().toString() + " (mDNS opcional: http://" + _hostname + ".local)";
@@ -1626,29 +1756,54 @@ void SuperOTA::handleConfigPage() {
         "margin:22px auto;padding:0 16px;}main{background:#162132;padding:22px;border-radius:12px;"
         "box-shadow:0 14px 26px rgba(0,0,0,.35);}h1{margin:0 0 10px 0;}p{color:#b8c9f0;line-height:1.45;}"
         "label{display:block;font-weight:700;margin:12px 0 4px;}input,textarea{width:100%;padding:10px;"
-        "border:1px solid #32456c;border-radius:8px;background:#0f1a2e;color:#eaf0ff;}textarea{min-height:140px;}"
-        "button{margin-top:0;padding:11px 14px;border:0;border-radius:8px;background:#315ea8;"
-        "color:#fff;font-weight:700;cursor:pointer;}button:hover{background:#3d74cc;}"
+        "border:1px solid #32456c;border-radius:8px;background:#0f1a2e;color:#eaf0ff;box-sizing:border-box;}"
+        "input:focus,textarea:focus{outline:none;border-color:#4a72ba;box-shadow:0 0 0 2px rgba(74,114,186,.22);}"
+        "textarea{min-height:140px;}button{margin-top:0;padding:11px 14px;border:0;border-radius:8px;"
+        "background:#315ea8;color:#fff;font-weight:700;cursor:pointer;}button:hover{background:#3d74cc;}"
         "small{color:#9eb5e8;}a{color:#7db7ff;}code{background:#0f1a2e;border:1px solid #32456c;padding:1px 6px;"
         "border-radius:6px;}.hint{padding:10px 12px;border-radius:8px;background:#0f1a2e;border:1px solid #32456c;"
-        "margin:10px 0 6px 0;}.check-row{display:flex;align-items:center;justify-content:space-between;"
+        "margin:10px 0 6px 0;}.section{padding:12px;border:1px solid #2b3e63;border-radius:10px;margin:14px 0;}"
+        ".section h2{margin:0 0 8px 0;font-size:18px;color:#dce8ff;}.check-row{display:flex;align-items:center;justify-content:space-between;"
         "gap:12px;margin:14px 0 6px 0;}.check-row .text{font-weight:700;color:#eaf0ff;}"
         ".check-row input[type=checkbox]{appearance:none;width:20px;height:20px;flex:0 0 auto;margin:0;"
         "border:1px solid #4f6ea8;border-radius:6px;background:#0f1a2e;cursor:pointer;position:relative;}"
         ".check-row input[type=checkbox]:checked{background:#315ea8;border-color:#5f84c8;}"
         ".check-row input[type=checkbox]:checked::after{content:'';position:absolute;left:6px;top:2px;"
         "width:5px;height:10px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg);}"
+        ".input-wrap{position:relative;display:block;}.input-wrap input{padding-right:40px;}"
+        ".peek-btn{position:absolute;right:10px;top:50%;transform:translateY(-50%);width:20px;height:20px;padding:0;"
+        "margin:0;border:0;background:transparent;display:inline-flex;align-items:center;justify-content:center;"
+        "color:#b8c9ee;opacity:.82;cursor:pointer;}"
+        ".peek-btn:hover{color:#dce8ff;opacity:1;}.peek-btn:focus-visible{outline:none;border-radius:999px;"
+        "box-shadow:0 0 0 2px rgba(93,129,196,.38);}"
+        ".peek-btn svg{position:absolute;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.75;"
+        "stroke-linecap:round;stroke-linejoin:round;transition:opacity .16s ease,transform .16s ease;}"
+        ".peek-btn .icon-open{opacity:0;transform:scale(.96);}"
+        ".peek-btn .icon-off{opacity:1;transform:scale(1);}"
+        ".peek-btn.is-active .icon-open{opacity:1;transform:scale(1);}"
+        ".peek-btn.is-active .icon-off{opacity:0;transform:scale(.96);}"
+        ".subhint{display:block;margin-top:4px;color:#9eb5e8;line-height:1.35;}"
+        ".collapse{overflow:hidden;max-height:240px;opacity:1;transform:translateY(0);"
+        "transition:max-height .26s ease,opacity .22s ease,transform .22s ease;}"
+        ".collapse.hidden{max-height:0;opacity:0;transform:translateY(-6px);pointer-events:none;margin-top:0;}"
+        ".status-ok{color:#74e6aa;}.status-warn{color:#ffd68a;}"
         ".form-footer{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px;}"
-        ".form-footer small{margin:0;}</style></head><body><main>");
+        ".form-footer small{margin:0;}.build-marker{margin:12px 0 2px 0;text-align:right;font-size:12px;"
+        "color:#86a0d4;letter-spacing:.01em;opacity:.92;}</style></head><body><main>");
 
   html += F("<h1>SuperOTA - Configuracao</h1><p>Edite os campos e clique em salvar. "
             "Formato da lista station: uma rede por linha em <code>SSID;senha</code>.</p>");
   html += F("<p class='hint'><strong>Acesso atual:</strong> ");
   html += htmlEscape(accessHint);
   html += F(" - porta 80</p>");
+  html += F("<p class='hint'><strong>Seguranca:</strong> OTA ");
+  html += otaSecured ? F("<span class='status-ok'>com senha</span>") : F("<span class='status-warn'>sem senha</span>");
+  html += F(" | Portal ");
+  html += portalSecured ? F("<span class='status-ok'>com senha</span>") : F("<span class='status-warn'>sem senha</span>");
+  html += F(" (usuario: <code>admin</code>)</p>");
   html += F("<p><a href='/scan' target='_blank'>Ver redes detectadas agora</a></p>");
 
-  html += F("<form method='post' action='/save'>");
+  html += F("<form method='post' action='/save' id='configForm'>");
   html += F("<label>Hostname</label><input name='hostname' value='");
   html += htmlEscape(_hostname);
   html += F("'/>\n");
@@ -1663,16 +1818,141 @@ void SuperOTA::handleConfigPage() {
   html += htmlEscape(_apSsid);
   html += F("'/>\n");
 
-  html += F("<label>AP Senha (vazio = AP aberto)</label><input name='apPassword' value='");
+  html += F("<label>AP Senha (vazio = AP aberto)</label><div class='input-wrap'>"
+            "<input id='apPasswordInput' type='password' name='apPassword' value='");
   html += htmlEscape(_apPassword);
-  html += F("'/>\n");
+  html += F("'/><button id='apPasswordPeek' class='peek-btn' type='button' aria-label='Mostrar senha' title='Pressione para revelar'>"
+            "<svg class='icon-open' viewBox='0 0 24 24' aria-hidden='true'><path d='M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z'/><circle cx='12' cy='12' r='2.6'/></svg>"
+            "<svg class='icon-off' viewBox='0 0 24 24' aria-hidden='true'><path d='M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z'/><circle cx='12' cy='12' r='2.6'/><path d='M4 4l16 16'/></svg>"
+            "</button></div>\n");
+
+  html += F("<div class='section'><h2>Seguranca</h2>");
+  html += F("<label class='check-row'><span class='text'>Exigir senha para OTA</span>"
+            "<input id='useOtaPasswordCheckbox' type='checkbox' name='useOtaPassword' ");
+  if (otaSecured) {
+    html += F("checked");
+  }
+  html += F("/></label>");
+  html += F("<div id='otaPasswordContainer' class='collapse");
+  if (!otaSecured) {
+    html += F(" hidden");
+  }
+  html += F("'>");
+  html += F("<label>Senha OTA (upload de firmware)</label><div class='input-wrap'>"
+            "<input id='otaPasswordInput' type='password' name='otaPassword' placeholder='deixe vazio para manter a atual' autocomplete='new-password'/>"
+            "<button id='otaPasswordPeek' class='peek-btn' type='button' aria-label='Mostrar senha OTA' title='Pressione para revelar'>"
+            "<svg class='icon-open' viewBox='0 0 24 24' aria-hidden='true'><path d='M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z'/><circle cx='12' cy='12' r='2.6'/></svg>"
+            "<svg class='icon-off' viewBox='0 0 24 24' aria-hidden='true'><path d='M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z'/><circle cx='12' cy='12' r='2.6'/><path d='M4 4l16 16'/></svg>"
+            "</button></div>");
+  html += F("<small class='subhint'>Porta OTA: 3232.</small>");
+  html += F("</div>");
+  html += F("<small id='otaDisabledNote' class='subhint'");
+  if (otaSecured) {
+    html += F(" style='display:none;'");
+  }
+  html += F(">Com essa opcao desligada, o upload OTA nao exige senha.</small>");
+
+  html += F("<label class='check-row'><span class='text'>Proteger portal com senha</span>"
+            "<input id='protectPortalCheckbox' type='checkbox' name='protectPortal' ");
+  if (portalSecured) {
+    html += F("checked");
+  }
+  html += F("/></label>");
+  html += F("<div id='portalSecurityContainer' class='collapse");
+  if (!portalSecured) {
+    html += F(" hidden");
+  }
+  html += F("'>");
+
+  html += F("<label class='check-row'><span class='text'>Usar senha OTA para proteger portal</span>"
+            "<input id='portalUseOtaCheckbox' type='checkbox' name='portalUseOta' ");
+  if (portalSecured && portalUsesOtaPassword) {
+    html += F("checked");
+  }
+  html += F("/></label>");
+  html += F("<small id='portalMirrorNote' class='subhint'");
+  if (!(portalSecured && portalUsesOtaPassword)) {
+    html += F(" style='display:none;'");
+  }
+  html += F(">Com essa opcao ativa, o portal usa a mesma senha OTA.</small>");
+
+  html += F("<div id='portalPasswordContainer' class='collapse");
+  if (!portalSecured || portalUsesOtaPassword) {
+    html += F(" hidden");
+  }
+  html += F("'>");
+  html += F("<label>Senha do portal (quando opcao acima estiver desmarcada)</label><div class='input-wrap'>"
+            "<input id='portalPasswordInput' type='password' name='portalPassword' placeholder='deixe vazio para manter a atual' autocomplete='new-password'/>"
+            "<button id='portalPasswordPeek' class='peek-btn' type='button' aria-label='Mostrar senha do portal' title='Pressione para revelar'>"
+            "<svg class='icon-open' viewBox='0 0 24 24' aria-hidden='true'><path d='M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z'/><circle cx='12' cy='12' r='2.6'/></svg>"
+            "<svg class='icon-off' viewBox='0 0 24 24' aria-hidden='true'><path d='M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z'/><circle cx='12' cy='12' r='2.6'/><path d='M4 4l16 16'/></svg>"
+            "</button></div>");
+  html += F("</div>");
+  html += F("</div>");
+  html += F("<small id='portalDisabledNote' class='subhint'");
+  if (portalSecured) {
+    html += F(" style='display:none;'");
+  }
+  html += F(">Com essa opcao desligada, o portal abre sem login.</small>");
+  html += F("<small class='subhint'>Se ambos os campos de senha ficarem vazios, as senhas atuais sao mantidas.</small>");
+  html += F("</div>");
 
   html += F("<label>Lista Station</label><textarea name='stationList'>");
   html += htmlEscape(stationText);
   html += F("</textarea>");
   html += F("<div class='form-footer'><small>Exemplo: MinhaCasa;senha123</small><button type='submit'>Salvar e aplicar</button></div></form>");
+  html += F("<p class='build-marker'>");
+  html += htmlEscape(configUiStamp);
+  html += F("</p>");
+  html += F("<script>(function(){"
+            "function bindHoldReveal(btnId,inputId){"
+            "var btn=document.getElementById(btnId);var input=document.getElementById(inputId);"
+            "if(!btn||!input)return;"
+            "var show=function(){input.type='text';btn.classList.add('is-active');};"
+            "var hide=function(){input.type='password';btn.classList.remove('is-active');};"
+            "btn.addEventListener('mousedown',function(e){e.preventDefault();show();});"
+            "btn.addEventListener('mouseup',hide);btn.addEventListener('mouseleave',hide);"
+            "btn.addEventListener('touchstart',function(e){e.preventDefault();show();},{passive:false});"
+            "btn.addEventListener('touchend',hide);btn.addEventListener('touchcancel',hide);"
+            "btn.addEventListener('keydown',function(e){if(e.key===' '||e.key==='Enter'){e.preventDefault();show();}});"
+            "btn.addEventListener('keyup',hide);btn.addEventListener('blur',hide);"
+            "document.addEventListener('mouseup',hide);document.addEventListener('touchend',hide);"
+            "}"
+            "function setHidden(el,hide){if(!el)return;if(hide)el.classList.add('hidden');else el.classList.remove('hidden');}"
+            "function syncSecurityPanels(){"
+            "var useOta=document.getElementById('useOtaPasswordCheckbox');"
+            "var otaPanel=document.getElementById('otaPasswordContainer');"
+            "var otaNote=document.getElementById('otaDisabledNote');"
+            "var protectPortal=document.getElementById('protectPortalCheckbox');"
+            "var portalSec=document.getElementById('portalSecurityContainer');"
+            "var portalDisabled=document.getElementById('portalDisabledNote');"
+            "var portalUseOta=document.getElementById('portalUseOtaCheckbox');"
+            "var portalPanel=document.getElementById('portalPasswordContainer');"
+            "var portalMirror=document.getElementById('portalMirrorNote');"
+            "if(useOta&&otaPanel&&otaNote){setHidden(otaPanel,!useOta.checked);otaNote.style.display=useOta.checked?'none':'block';}"
+            "if(!protectPortal||!portalSec||!portalDisabled){return;}"
+            "setHidden(portalSec,!protectPortal.checked);portalDisabled.style.display=protectPortal.checked?'none':'block';"
+            "if(!protectPortal.checked){if(portalMirror)portalMirror.style.display='none';setHidden(portalPanel,true);return;}"
+            "if(portalUseOta&&portalUseOta.checked&&useOta&&!useOta.checked){useOta.checked=true;setHidden(otaPanel,false);if(otaNote)otaNote.style.display='none';}"
+            "if(portalUseOta&&portalUseOta.checked){setHidden(portalPanel,true);if(portalMirror)portalMirror.style.display='block';}"
+            "else{setHidden(portalPanel,false);if(portalMirror)portalMirror.style.display='none';}"
+            "}"
+            "bindHoldReveal('apPasswordPeek','apPasswordInput');"
+            "bindHoldReveal('otaPasswordPeek','otaPasswordInput');"
+            "bindHoldReveal('portalPasswordPeek','portalPasswordInput');"
+            "var portalUseOtaCb=document.getElementById('portalUseOtaCheckbox');"
+            "var protectPortalCb=document.getElementById('protectPortalCheckbox');"
+            "var useOtaCb=document.getElementById('useOtaPasswordCheckbox');"
+            "if(portalUseOtaCb){portalUseOtaCb.addEventListener('change',syncSecurityPanels);}"
+            "if(protectPortalCb){protectPortalCb.addEventListener('change',syncSecurityPanels);}"
+            "if(useOtaCb){useOtaCb.addEventListener('change',syncSecurityPanels);}"
+            "syncSecurityPanels();"
+            "})();</script>");
   html += F("</main></body></html>");
 
+  _configServer->sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  _configServer->sendHeader("Pragma", "no-cache");
+  _configServer->sendHeader("Expires", "-1");
   _configServer->send(200, "text/html", html);
 }
 
@@ -1684,11 +1964,48 @@ void SuperOTA::handleConfigSave() {
   const String hostname = _configServer->arg("hostname");
   const String apSsid = _configServer->arg("apSsid");
   const String apPassword = _configServer->arg("apPassword");
+  const bool useOtaPassword = _configServer->hasArg("useOtaPassword");
+  const bool protectPortal = _configServer->hasArg("protectPortal");
+  const String otaPassword = _configServer->arg("otaPassword");
+  const String portalPassword = _configServer->arg("portalPassword");
+  const bool portalUseOtaRequested = _configServer->hasArg("portalUseOta");
   const String stationList = _configServer->arg("stationList");
+  bool securityChanged = false;
 
   setHostname(hostname.c_str());
   setPreferAccessPoint(_configServer->hasArg("preferAP"));
   setAccessPointCredentials(apSsid.c_str(), apPassword.c_str());
+
+  if (useOtaPassword) {
+    if (otaPassword.length() > 0 && otaPassword != _otaPassword) {
+      setOtaPassword(otaPassword.c_str());
+      securityChanged = true;
+    }
+  } else if (_otaPassword.length() > 0) {
+    _otaPassword = "";
+    securityChanged = true;
+    println(F("[SuperOTA] Senha OTA desativada."));
+  }
+
+  if (!protectPortal) {
+    if (_portalPassword.length() > 0 || _useOtaPasswordForPortal) {
+      securityChanged = true;
+    }
+    _portalPassword = "";
+    _useOtaPasswordForPortal = false;
+    println(F("[SuperOTA] Protecao do portal desativada."));
+  } else {
+    const bool effectivePortalUseOta = portalUseOtaRequested && useOtaPassword;
+    if (_useOtaPasswordForPortal != effectivePortalUseOta) {
+      _useOtaPasswordForPortal = effectivePortalUseOta;
+      securityChanged = true;
+    }
+    if (!effectivePortalUseOta && portalPassword.length() > 0 && portalPassword != _portalPassword) {
+      setPortalPassword(portalPassword.c_str());
+      securityChanged = true;
+    }
+  }
+
   parseAndSetStationList(stationList);
 
   savePreferences();
@@ -1703,12 +2020,17 @@ void SuperOTA::handleConfigSave() {
   response += F("<p>Redes station cadastradas: ");
   response += String(_stationCount);
   response += F("</p><p>O portal sera fechado e o OTA sera reconfigurado automaticamente.</p>");
+  response += F("<p>Seguranca OTA: ");
+  response += otaPasswordEnabled() ? F("com senha") : F("sem senha");
+  response += F("<br/>Seguranca portal: ");
+  response += portalPasswordEnabled() ? F("com senha") : F("sem senha");
+  response += F("</p>");
   response += F("<p>Voce pode fechar esta pagina.</p></div></body></html>");
 
   _configServer->send(200, "text/html", response);
   _deferredPortalResumeAuto = true;
   _deferredPortalStopAfterMs = millis() + kConfigPortalDeferredStopMs;
-  _deferredPortalRestart = _safeP4Mode && kBuildTargetIsP4;
+  _deferredPortalRestart = securityChanged || (_safeP4Mode && kBuildTargetIsP4);
   _deferredPortalStop = true;
 }
 

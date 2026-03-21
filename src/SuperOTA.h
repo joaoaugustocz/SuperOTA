@@ -39,6 +39,12 @@ public:
   bool telnetSerialEnabled() const;
   uint16_t telnetPort() const;
   bool telnetClientConnected();
+  void setOtaPassword(const char* password);
+  bool otaPasswordEnabled() const;
+  void setPortalPassword(const char* password);
+  void setUseOtaPasswordForPortal(bool enable);
+  bool usingOtaPasswordForPortal() const;
+  bool portalPasswordEnabled() const;
 
   void enableSerialConfigCommand(bool enable = true, const char* command = "configota");
   bool startConfigPortal(const char* apSsid = nullptr, const char* apPassword = nullptr);
@@ -123,6 +129,8 @@ private:
   void processCommandLine(const String& command);
   bool startConfigPortalOnStation();
   bool startConfigPortalOnAccessPoint(const char* apSsid, const char* apPassword);
+  bool ensurePortalAuthentication();
+  String effectivePortalPassword() const;
   void runConfigPortalForegroundLoop();
   void handleDeferredPortalStop();
   void printConfigPortalEndpoints() const;
@@ -177,6 +185,9 @@ private:
   String _apSsid;
   String _apPassword;
   String _hostname;
+  String _otaPassword;
+  String _portalPassword;
+  bool _useOtaPasswordForPortal;
   bool _preferAccessPoint;
   bool _safeP4Mode;
   bool _debugMetricsEnabled;
