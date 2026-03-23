@@ -66,6 +66,26 @@ String htmlEscape(const String& value) {
   return out;
 }
 
+bool isCommandStartByte(char c) {
+  const uint8_t u = static_cast<uint8_t>(c);
+  return ((u >= '0' && u <= '9') || (u >= 'A' && u <= 'Z') || (u >= 'a' && u <= 'z') || u == '_' || u == '-');
+}
+
+bool shouldIgnoreLeadingCommandByte(const String& buffer, char c) {
+  if (buffer.length() != 0) {
+    return false;
+  }
+
+  const uint8_t u = static_cast<uint8_t>(c);
+
+  // Ignore UTF-8 BOM bytes and control bytes some terminals send before commands.
+  if (u == 0xEF || u == 0xBB || u == 0xBF || u < 0x20 || u == 0x7F) {
+    return true;
+  }
+
+  return !isCommandStartByte(c);
+}
+
 bool prepareP4AccessPointStack(bool safeMode) {
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
   if (!Network.begin()) {
@@ -648,41 +668,88 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
     configPass = "";
   }
 
-  _configured = false;
-  _stationMode = false;
-  stopNetworking();
-
   const IPAddress apIp(192, 168, 4, 1);
   const IPAddress apGateway(192, 168, 4, 1);
   const IPAddress apSubnet(255, 255, 255, 0);
   const IPAddress apDhcpLeaseStart(192, 168, 4, 2);
   const IPAddress apDns(192, 168, 4, 1);
+  IPAddress currentApIp;
+
+  bool reuseCurrentAp = false;
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  if (defaultSsidRequested && _configured && !_stationMode) {
+    const String activeSsid = WiFi.softAPSSID();
+    const IPAddress activeIp = WiFi.softAPIP();
+    if (activeSsid.length() > 0 && hasValidIp(activeIp)) {
+      reuseCurrentAp = true;
+      configSsid = activeSsid;
+      currentApIp = activeIp;
+      Serial.print(F("[SuperOTA] Reutilizando AP atual para abrir portal: "));
+      Serial.println(configSsid);
+    }
+  }
+#endif
+
+  if (!reuseCurrentAp) {
+    _configured = false;
+    _stationMode = false;
+    stopNetworking();
+  }
 
   bool apOk = false;
+  if (reuseCurrentAp) {
+    apOk = true;
+  } else {
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
-  if (!prepareP4AccessPointStack(_safeP4Mode)) {
-    return false;
-  }
-  if (_hostname.length()) {
-    WiFi.softAPsetHostname(_hostname.c_str());
-  }
-  if (!WiFi.AP.config(apIp, apGateway, apSubnet, apDhcpLeaseStart, apDns)) {
-    Serial.println(F("[SuperOTA] Aviso: falha ao aplicar AP.config no P4."));
-  }
-  apOk = WiFi.AP.create(configSsid.c_str(), configPass.c_str(), 1, 0, 4);
-#else
-  WiFi.mode(WIFI_AP);
-  if (_hostname.length()) {
-    WiFi.softAPsetHostname(_hostname.c_str());
-  }
-  if (!WiFi.softAPConfig(apIp, apGateway, apSubnet, apDhcpLeaseStart, apDns)) {
-    Serial.println(F("[SuperOTA] Aviso: falha ao aplicar softAPConfig personalizada."));
-  }
+    const uint8_t attempts = _safeP4Mode ? kSafeP4ConnectAttempts : 1;
+    for (uint8_t attempt = 1; attempt <= attempts; ++attempt) {
+      if (_safeP4Mode && attempts > 1) {
+        Serial.print(F("[SuperOTA] Modo seguro P4: tentativa portal AP "));
+        Serial.print(attempt);
+        Serial.print('/');
+        Serial.println(attempts);
+      }
 
-  const bool hasPassword = configPass.length() > 0;
-  apOk = hasPassword ? WiFi.softAP(configSsid.c_str(), configPass.c_str())
-                     : WiFi.softAP(configSsid.c_str());
+      if (attempt > 1) {
+        stopNetworking();
+        if (_safeP4Mode) {
+          delay(kSafeP4RetryDelayMs);
+        }
+      }
+
+      if (!prepareP4AccessPointStack(_safeP4Mode)) {
+        if (_safeP4Mode && attempt < attempts) {
+          continue;
+        }
+        return false;
+      }
+
+      if (_hostname.length()) {
+        WiFi.softAPsetHostname(_hostname.c_str());
+      }
+      if (!WiFi.AP.config(apIp, apGateway, apSubnet, apDhcpLeaseStart, apDns)) {
+        Serial.println(F("[SuperOTA] Aviso: falha ao aplicar AP.config no P4."));
+      }
+
+      apOk = WiFi.AP.create(configSsid.c_str(), configPass.c_str(), 1, 0, 4);
+      if (apOk) {
+        break;
+      }
+    }
+#else
+    WiFi.mode(WIFI_AP);
+    if (_hostname.length()) {
+      WiFi.softAPsetHostname(_hostname.c_str());
+    }
+    if (!WiFi.softAPConfig(apIp, apGateway, apSubnet, apDhcpLeaseStart, apDns)) {
+      Serial.println(F("[SuperOTA] Aviso: falha ao aplicar softAPConfig personalizada."));
+    }
+
+    const bool hasPassword = configPass.length() > 0;
+    apOk = hasPassword ? WiFi.softAP(configSsid.c_str(), configPass.c_str())
+                       : WiFi.softAP(configSsid.c_str());
 #endif
+  }
 
   if (!apOk) {
     Serial.println(F("[SuperOTA] Falha ao abrir AP do portal."));
@@ -694,15 +761,17 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
 
   uint32_t waitStartMs = millis();
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
-  while (!hasValidIp(WiFi.AP.localIP()) && (millis() - waitStartMs) < 3000U) {
-    delay(25);
+  if (!reuseCurrentAp) {
+    while (!hasValidIp(WiFi.AP.localIP()) && (millis() - waitStartMs) < 3000U) {
+      delay(25);
+    }
   }
-  const IPAddress currentApIp = WiFi.AP.localIP();
+  currentApIp = WiFi.AP.localIP();
 #else
   while (!hasValidIp(WiFi.softAPIP()) && (millis() - waitStartMs) < 3000U) {
     delay(25);
   }
-  const IPAddress currentApIp = WiFi.softAPIP();
+  currentApIp = WiFi.softAPIP();
 #endif
   if (!hasValidIp(currentApIp)) {
     Serial.println(F("[SuperOTA] AP sem IP valido para iniciar portal."));
@@ -1651,6 +1720,10 @@ void SuperOTA::processSerialCommands() {
       command.trim();
       command.toLowerCase();
       processCommandLine(command);
+      continue;
+    }
+
+    if (shouldIgnoreLeadingCommandByte(_serialBuffer, c)) {
       continue;
     }
 
