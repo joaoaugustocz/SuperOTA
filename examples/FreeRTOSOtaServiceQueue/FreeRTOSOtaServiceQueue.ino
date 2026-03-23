@@ -48,7 +48,11 @@ void handleOtaCommand(const OtaCommand& cmd) {
   switch (cmd.type) {
     case OTA_CMD_PORTAL_AP:
       Serial.println("[OTA-SVC] Abrindo portal em AP...");
-      ota.startConfigPortal("SuperOTA-RTOS-Setup", "12345678");
+      if (ota.startConfigPortal()) {
+        Serial.println("[OTA-SVC] Portal AP solicitado com sucesso.");
+      } else {
+        Serial.println("[OTA-SVC] Falha ao abrir portal AP.");
+      }
       break;
 
     case OTA_CMD_PORTAL_STOP:
@@ -102,7 +106,9 @@ void otaServiceTask(void* /*parameter*/) {
 void printConsoleHelp() {
   Serial.println("[CONSOLE] Comandos:");
   Serial.println("[CONSOLE] portal-ap      -> abre portal em AP");
+  Serial.println("[CONSOLE] configota      -> alias para portal-ap");
   Serial.println("[CONSOLE] portal-stop    -> fecha portal");
+  Serial.println("[CONSOLE] config-stop    -> alias para portal-stop");
   Serial.println("[CONSOLE] debug-on       -> ativa metricas debug");
   Serial.println("[CONSOLE] debug-off      -> desativa metricas debug");
   Serial.println("[CONSOLE] debug-summary  -> resumo imediato de debug");
@@ -120,14 +126,14 @@ void processConsoleCommand(const String& cmdRaw) {
     return;
   }
 
-  if (cmd == "portal-ap") {
+  if (cmd == "portal-ap" || cmd == "configota") {
     if (!enqueueOtaCommand(OTA_CMD_PORTAL_AP)) {
       Serial.println("[CONSOLE] Falha ao enfileirar comando.");
     }
     return;
   }
 
-  if (cmd == "portal-stop") {
+  if (cmd == "portal-stop" || cmd == "config-stop") {
     if (!enqueueOtaCommand(OTA_CMD_PORTAL_STOP)) {
       Serial.println("[CONSOLE] Falha ao enfileirar comando.");
     }
