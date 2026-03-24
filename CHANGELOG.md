@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 - 2026-03-23
 - Portal/configuracao:
   - `startConfigPortalOnStation()` promovido para API publica.
   - `startConfigPortal()` sem argumentos passa a reutilizar o AP operacional configurado, em vez de criar SSID temporario de setup por padrao.
   - reuso do AP atual quando o dispositivo ja esta em modo AP.
+  - `startConfigPortal()` em station + AP agora preserva o SSID operacional configurado, evitando trocas inesperadas para SSIDs temporarios.
 - ESP32-P4:
   - salvar apenas mudancas de seguranca no portal agora reaplica sem reboot;
   - reinicio seguro fica restrito a mudancas de topologia (`hostname`, preferencia AP, credenciais AP e lista station).

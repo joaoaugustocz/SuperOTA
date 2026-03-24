@@ -26,7 +26,7 @@ constexpr uint16_t kSafeP4RetryDelayMs = 250;
 constexpr uint16_t kSafeP4LinkStabilizeDelayMs = 120;
 constexpr uint16_t kConfigPortalPort = 80;
 constexpr uint16_t kConfigPortalDeferredStopMs = 1200;
-constexpr char kSuperOtaVersion[] = "1.2.1";
+constexpr char kSuperOtaVersion[] = "1.3.0";
 constexpr char kConfigUiRevision[] = "ui-2026-03-23-portal-flow-v1";
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
