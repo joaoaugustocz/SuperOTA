@@ -22,10 +22,16 @@ void setup() {
   ota.enableTelnetSerial(true, 23);
 
   // Carrega configuracao salva pelo portal/NVS.
-  ota.loadPreferences();
+  const bool prefsLoaded = ota.loadPreferences();
 
   // Defaults iniciais (somente se ainda nao houver perfil salvo).
-  if (!ota.hasStationCredentials()) {
+  bool shouldPersistSettings = false;
+  if (!prefsLoaded) {
+    Serial.println("[APP] Aviso: NVS indisponivel. Usando defaults apenas em RAM.");
+    ota.setHostname(kHostname);
+    ota.setPreferAccessPoint(true);
+    ota.setAccessPointCredentials(kApSsid, kApPassword);
+  } else if (!ota.hasStationCredentials()) {
     ota.setHostname(kHostname);
     ota.setPreferAccessPoint(true);
     ota.setAccessPointCredentials(kApSsid, kApPassword);
@@ -33,7 +39,7 @@ void setup() {
     // Adicione redes se quiser testar STA + fallback AP:
     // ota.addStationNetwork("MinhaRede", "MinhaSenha");
 
-    ota.savePreferences();
+    shouldPersistSettings = true;
     Serial.println("[APP] Perfil inicial salvo na NVS.");
   } else {
     Serial.println("[APP] Perfil carregado da NVS.");
@@ -43,21 +49,35 @@ void setup() {
   // (evita sobrescrever senha configurada pelo portal).
   if (!ota.otaPasswordEnabled()) {
     ota.setOtaPassword(kDefaultOtaPassword);
+    shouldPersistSettings = true;
     Serial.println("[APP] Senha OTA inicial aplicada.");
   }
 
   // Politica de senha do portal.
   if (kUseSeparatePortalPassword) {
-    ota.setUseOtaPasswordForPortal(false);
-    ota.setPortalPassword(kDefaultPortalPassword);
+    if (ota.usingOtaPasswordForPortal()) {
+      ota.setUseOtaPasswordForPortal(false);
+      shouldPersistSettings = true;
+    }
+    if (!ota.portalPasswordEnabled()) {
+      ota.setPortalPassword(kDefaultPortalPassword);
+      shouldPersistSettings = true;
+    }
     Serial.println("[APP] Portal com senha separada.");
   } else {
-    ota.setUseOtaPasswordForPortal(true);
+    if (!ota.usingOtaPasswordForPortal()) {
+      ota.setUseOtaPasswordForPortal(true);
+      shouldPersistSettings = true;
+    }
     Serial.println("[APP] Portal usando a mesma senha do OTA.");
   }
 
   // Persistencia dos ajustes de seguranca.
-  ota.savePreferences();
+  if (!prefsLoaded) {
+    Serial.println("[APP] Ajustes de seguranca aplicados apenas em RAM nesta execucao.");
+  } else if (shouldPersistSettings) {
+    ota.savePreferences();
+  }
 
   if (!ota.begin()) {
     Serial.println("[APP] Falha ao iniciar SuperOTA.");
@@ -67,6 +87,7 @@ void setup() {
   Serial.println();
   Serial.println("[APP] ===== Teste de seguranca SuperOTA =====");
   Serial.println("[APP] 1) Digite 'configota' no serial para abrir portal.");
+  Serial.println("[APP]    Em station, 'configota' pergunta 1=station / 2=AP.");
   Serial.println("[APP] 2) Login do portal: usuario 'admin'.");
   Serial.println("[APP] 3) OTA requer senha (auth) na porta 3232.");
   Serial.println("[APP] 4) URL portal em AP: http://192.168.4.1");
@@ -81,4 +102,3 @@ void setup() {
 void loop() {
   ota.loop();
 }
-

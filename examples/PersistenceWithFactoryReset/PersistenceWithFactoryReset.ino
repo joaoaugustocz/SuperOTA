@@ -52,9 +52,18 @@ void setup() {
   // Padrao recomendado:
   // 1) Carrega NVS.
   // 2) Somente se NVS estiver vazia, grava defaults.
-  ota.loadPreferences();
+  const bool prefsLoaded = ota.loadPreferences();
 
-  if (!ota.hasStationCredentials()) {
+  if (!prefsLoaded) {
+    Serial.println("[APP] Aviso: NVS indisponivel. Usando defaults apenas em RAM.");
+    ota.setHostname("superota-persist");
+    ota.setPreferAccessPoint(false);
+    ota.setAccessPointCredentials("SuperOTA-Recovery", "12345678");
+
+    ota.clearStationNetworks();
+    ota.addStationNetwork("MinhaRede", "MinhaSenha");
+    ota.addStationNetwork("MinhaRedeBackup", "MinhaSenhaBackup");
+  } else if (!ota.hasStationCredentials()) {
     ota.setHostname("superota-persist");
     ota.setPreferAccessPoint(false);
     ota.setAccessPointCredentials("SuperOTA-Recovery", "12345678");
@@ -75,6 +84,7 @@ void setup() {
 
   Serial.println("[APP] Comandos:");
   Serial.println("[APP] - configota   -> abre portal e salva configuracoes");
+  Serial.println("[APP] - em station, configota pergunta 1=station / 2=AP");
   Serial.println("[APP] - nvs-status -> mostra estado basico da NVS");
   Serial.println("[APP] - nvs-clear  -> limpa NVS e reinicia");
 }

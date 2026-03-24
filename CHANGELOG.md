@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+- Portal/configuracao:
+  - `startConfigPortalOnStation()` promovido para API publica.
+  - `startConfigPortal()` sem argumentos passa a reutilizar o AP operacional configurado, em vez de criar SSID temporario de setup por padrao.
+  - reuso do AP atual quando o dispositivo ja esta em modo AP.
+- ESP32-P4:
+  - salvar apenas mudancas de seguranca no portal agora reaplica sem reboot;
+  - reinicio seguro fica restrito a mudancas de topologia (`hostname`, preferencia AP, credenciais AP e lista station).
+  - logs mais claros no fluxo diferido de aplicacao: sem reboot vs reinicio seguro.
+- Persistencia/NVS:
+  - exemplos oficiais atualizados para nao gravarem defaults automaticamente quando `loadPreferences()` falhar.
+- Exemplos:
+  - `FreeRTOSOtaServiceQueue` refeito para espelhar o fluxo oficial do `configota` com escolha `1 = station` e `2 = AP`.
+  - novo exemplo `GuidedSetupP4` com README proprio.
+- Documentacao:
+  - README principal reorganizado como guia de configuracao e operacao.
+
 ## 1.2.1 - 2026-03-21
 - Portal de configuracao:
   - refinamento visual dos icones de senha (olho/olho riscado) com estilo mais minimalista;

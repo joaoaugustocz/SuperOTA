@@ -1,68 +1,207 @@
 # SuperOTA
 
-Subbiblioteca extraida da `Baratinha` com foco exclusivo em OTA para ESP32.
-
-## O que essa versao adiciona
-
-- Exemplo e fluxo de inicializacao AP-only.
-- Lista de redes station (ate `kMaxStationNetworks`) com scan inteligente.
-- Portal web de configuracao para editar:
-  - hostname;
-  - preferencia de inicializacao (STA/AP);
-  - credenciais AP;
-  - lista de redes station;
-  - senha OTA;
-  - senha do portal.
-- Entrada no portal por comando serial (default: `configota`).
-- Modo debug sob demanda para metricas de captive portal/AP.
+Biblioteca OTA para ESP32 com fallback entre station e access point, portal web de configuracao, mDNS, serial via Telnet e persistencia em NVS.
 
 ## Visao geral
 
-`SuperOTA` oferece:
+`SuperOTA` resolve quatro problemas comuns em projetos ESP32:
 
-- OTA via `ArduinoOTA`;
-- fallback STA/AP;
-- mDNS (`hostname.local`);
-- persistencia NVS (`Preferences`);
-- modo seguro automatico para target ESP32-P4.
+- subir firmware via WiFi usando `ArduinoOTA`;
+- conectar automaticamente em uma lista priorizada de redes station;
+- cair para AP quando nao houver station valida;
+- abrir um portal web para editar a configuracao sem recompilar o firmware.
 
-## Estrutura
+A biblioteca foi validada com foco especial em `ESP32-P4`, mas o desenho geral tambem serve para outros ESP32 suportados pelo core Arduino.
 
-```text
-SuperOTA/
-  library.properties
-  library.json
-  keywords.txt
-  LICENSE
-  .github/workflows/ci.yml
-  README.md
-  src/
-    SuperOTA.h
-    SuperOTA.cpp
-  examples/
-    BasicStationOrAP/
-      BasicStationOrAP.ino
-    BasicAccessPointOnly/
-      BasicAccessPointOnly.ino
-    StationListWithSerialConfig/
-      StationListWithSerialConfig.ino
-    PersistenceWithFactoryReset/
-      PersistenceWithFactoryReset.ino
-    FreeRTOSBasic/
-      FreeRTOSBasic.ino
-    FreeRTOSOtaServiceQueue/
-      FreeRTOSOtaServiceQueue.ino
+## Instalacao
+
+### Arduino IDE
+
+1. Instale a biblioteca `SuperOTA`.
+2. Certifique-se de estar usando um core Arduino para ESP32 compativel.
+3. Inclua no sketch:
+
+```cpp
+#include <SuperOTA.h>
 ```
 
-## Requisitos
+### PlatformIO
 
-- ESP32
-- Core Arduino para ESP32
-- Bibliotecas do core: `WiFi`, `ArduinoOTA`, `ESPmDNS`, `Preferences`, `WebServer`, `DNSServer`
+Use a biblioteca pelo GitHub/release ou por caminho local.
 
-## PlatformIO.ini (obrigatorio para OTA + serial Wi-Fi)
+Exemplo com caminho local:
 
-Use este bloco como base no seu `platformio.ini`:
+```ini
+lib_deps =
+  file://C:/caminho/absoluto/para/SuperOTA
+```
+
+## Configuracao rapida
+
+Fluxo recomendado no `setup()`:
+
+1. `beginSerial()`
+2. `enableSerialConfigCommand(true, "configota")`
+3. `loadPreferences()`
+4. se a NVS estiver valida e ainda nao houver perfil salvo, aplicar defaults e `savePreferences()`
+5. `begin()`
+6. manter `loop()` rodando continuamente
+
+Exemplo minimo:
+
+```cpp
+#include <Arduino.h>
+#include <SuperOTA.h>
+
+SuperOTA ota;
+
+void setup() {
+  ota.beginSerial(115200);
+  ota.enableSerialConfigCommand(true, "configota");
+
+  const bool prefsLoaded = ota.loadPreferences();
+  if (prefsLoaded && !ota.hasStationCredentials()) {
+    ota.setHostname("meu-dispositivo");
+    ota.setPreferAccessPoint(false);
+    ota.setAccessPointCredentials("MeuAP-OTA", "12345678");
+    ota.addStationNetwork("MinhaRede", "MinhaSenha");
+    ota.addStationNetwork("MinhaRedeBackup", "MinhaSenhaBackup");
+    ota.savePreferences();
+  }
+
+  ota.begin();
+}
+
+void loop() {
+  ota.loop();
+}
+```
+
+## Fluxo recomendado de setup
+
+Padrao seguro para producao:
+
+1. tente `loadPreferences()` sempre no inicio;
+2. se `loadPreferences()` falhar, trate como falha de NVS e rode com defaults apenas em RAM;
+3. grave defaults com `savePreferences()` somente quando a NVS estiver acessivel e vazia;
+4. nao reaplique defaults em todo boot, ou voce sobrescreve o que foi salvo pelo portal;
+5. use `configota` para manutencao em campo.
+
+Padrao errado:
+
+```cpp
+ota.loadPreferences();
+if (!ota.hasStationCredentials()) {
+  // defaults...
+  ota.savePreferences();
+}
+```
+
+Esse padrao e perigoso quando a NVS falha na leitura. Nessa situacao `hasStationCredentials()` pode voltar `false` e o exemplo acaba gravando defaults por cima de uma configuracao que deveria ter sido apenas preservada.
+
+## Como funciona o `configota`
+
+Com o parser serial interno habilitado, o comando `configota` funciona assim:
+
+### Quando o dispositivo esta em station conectado
+
+A biblioteca pergunta no serial:
+
+- `1` = abrir o portal no station atual;
+- `2` = abrir o portal em AP.
+
+Station e util quando voce ja tem IP valido e quer acessar:
+
+- `http://hostname.local`
+- `http://<ip-station>`
+
+AP e util quando voce quer forcar um portal de configuracao isolado, com `http://192.168.4.1` como fallback.
+
+### Quando o dispositivo ja esta em AP
+
+`configota` reutiliza o AP atual e abre o portal nele. Nao ha troca de SSID no meio do fluxo.
+
+### Quando o dispositivo nao esta em station conectado
+
+`configota` abre o portal em AP usando o AP operacional configurado na biblioteca.
+
+## Station vs AP
+
+A biblioteca trabalha com dois modos operacionais:
+
+### Station
+
+- tenta conectar em uma das redes cadastradas;
+- respeita a ordem de prioridade da lista station;
+- usa scan para escolher apenas redes realmente visiveis;
+- se conectar, ativa OTA, mDNS, Telnet serial e pode abrir portal no proprio station.
+
+### Access Point
+
+- e usado como fallback quando nao existe station disponivel;
+- tambem pode ser escolhido explicitamente no portal/configota;
+- usa o SSID definido por `setAccessPointCredentials()` como AP operacional;
+- o mesmo SSID e reutilizado pelo portal quando ele e aberto em AP por padrao.
+
+Na pratica, isso significa que `startConfigPortal()` sem argumentos agora usa o AP operacional configurado, em vez de criar um SSID aleatorio de setup quando isso nao for necessario.
+
+## Persistencia na NVS
+
+A biblioteca salva configuracoes no namespace `superota` via `Preferences`.
+
+Persistido na NVS:
+
+- hostname;
+- preferencia AP/station;
+- AP SSID e AP senha;
+- lista station;
+- senha OTA;
+- senha do portal;
+- flag para reutilizar a senha OTA no portal.
+
+O que normalmente sobrevive:
+
+- reboot;
+- power cycle;
+- update OTA comum de firmware.
+
+O que normalmente apaga a configuracao:
+
+- `clearPreferences()`;
+- erase total da flash;
+- mudanca de particoes que destrua a NVS.
+
+## Senhas OTA e portal
+
+A biblioteca suporta dois controles de acesso independentes:
+
+- senha OTA para upload na porta `3232`;
+- senha do portal via HTTP Basic (`usuario: admin`).
+
+Voce pode usar:
+
+- a mesma senha para OTA e portal; ou
+- uma senha separada para o portal.
+
+API de seguranca:
+
+- `setOtaPassword(const char* password)`
+- `otaPasswordEnabled() const`
+- `setPortalPassword(const char* password)`
+- `setUseOtaPasswordForPortal(bool enable)`
+- `usingOtaPasswordForPortal() const`
+- `portalPasswordEnabled() const`
+
+Recomendacao pratica:
+
+1. use senha OTA forte;
+2. mantenha o portal fechado e abra apenas sob comando;
+3. use o mesmo segredo para OTA + portal se quiser operacao mais simples em campo;
+4. use senha separada apenas quando isso fizer sentido operacionalmente.
+
+## PlatformIO.ini
+
+### Exemplo para ESP32-P4 com upload serial inicial
 
 ```ini
 [env:esp32-p4-evboard]
@@ -70,379 +209,233 @@ platform = https://github.com/pioarduino/platform-espressif32.git
 board = esp32-p4-evboard
 framework = arduino
 
+lib_deps =
+  file://C:/caminho/absoluto/para/SuperOTA
+
 build_flags =
   -D ARDUINO_USB_CDC_ON_BOOT=0
   -D CORE_DEBUG_LEVEL=0
 
-; Upload OTA de firmware (ArduinoOTA)
+monitor_speed = 115200
+monitor_port = COM5
+```
+
+### Exemplo para OTA depois que o station estiver funcional
+
+```ini
 upload_protocol = espota
 upload_port = superota.local
 upload_flags =
   --port=3232
+  --auth=TroqueEssaSenha123!
+```
 
-; Monitor serial sem fio (Telnet SuperOTA)
-monitor_speed = 115200
+### Exemplo para serial por Telnet
+
+```ini
 monitor_port = socket://superota.local:23
 ```
 
 Importante:
 
-- `upload_protocol`, `upload_port` e `upload_flags` **nao** podem ter espaco no inicio da linha.
-- Se essas chaves ficarem indentadas, o PlatformIO pode tratar como `build_flags`, gerando erros como:
-  - `unrecognized command-line option '--port=3232'`
-  - erros de linker com `cannot find -l...upload_protocol` etc.
-- Para usar serial USB local, troque para `monitor_port = COMx`.
-
-## Fluxo inteligente de station
-
-Quando existem redes station cadastradas:
-
-1. `SuperOTA` escaneia redes visiveis com `WiFi.scanNetworks()`.
-2. Procura a primeira rede encontrada respeitando sua ordem de prioridade na lista.
-3. Conecta apenas em uma rede detectada no scan.
-4. Se nao encontrar nenhuma, faz fallback para AP (dependendo da configuracao).
-
-Toda a decisao e impressa via `Serial`.
-
-## Persistencia apos reboot e update
-
-Resumo direto:
-
-- Sim, o que voce salva no `configota` fica na NVS.
-- Reiniciar ou cortar energia nao apaga essas configuracoes.
-- Update OTA de firmware normalmente tambem nao apaga NVS.
-
-Quando pode perder dados:
-
-- se o firmware chamar `clearPreferences()`;
-- se voce fizer erase total de flash;
-- se houver mudanca de tabela de particoes que remova/altere NVS.
-
-Padrao recomendado no `setup()`:
-
-1. `loadPreferences()`
-2. se nao houver dados (`!hasStationCredentials()`), aplicar defaults
-3. `savePreferences()` apenas nesse primeiro setup
-
-Isso evita sobrescrever no boot o que foi salvo via portal.
-
-## Uso com FreeRTOS (SO)
-
-Abordagens possiveis:
-
-1. `ota.loop()` no `loop()` Arduino + tasks FreeRTOS para aplicacao.
-2. Task dedicada para OTA/rede chamando `ota.loop()` periodicamente.
-3. Servico OTA com fila de comandos (task unica dona da biblioteca).
-4. (Opcional) fixar tasks por core em chips multicore.
-
-Recomendacao:
-
-- Comece pela abordagem 2.
-- Em projeto de producao, evolua para abordagem 3 (fila), pois reduz risco de concorrencia.
-
-Regras praticas para evitar race condition:
-
-- Defina uma task "dona" da `SuperOTA` em runtime.
-- Evite chamar metodos da biblioteca a partir de multiplas tasks ao mesmo tempo.
-- Se outra task precisar acionar OTA/portal/debug, envie comando por fila para a task dona.
-- Nao tenha duas tasks lendo `Serial` em paralelo sem coordenacao.
-
-Timing e prioridade sugeridos:
-
-- Chamar `ota.loop()` a cada `5-20ms`.
-- Task OTA com prioridade maior que tarefas de baixa criticidade (ex.: OTA = 3, app = 1-2).
-- Evite blocos longos na task dona da OTA.
-
-## Portal de configuracao
-
-Com serial habilitado, digite no monitor serial:
-
-- `configota` -> inicia fluxo de abertura do portal
-- se estiver em station conectado, a biblioteca pergunta:
-  - `1` = abrir portal em station (`http://hostname.local`)
-  - `2` = abrir portal em AP (captive portal)
-- `config-stop` -> encerra portal e retoma configuracao OTA
-- `config-help` -> mostra comandos
-
-Quando aberto em station, a pagina fica disponivel em:
-
-- `http://hostname.local`
-- `http://<ip_station>`
-- porta HTTP: `80`
-- login HTTP Basic quando senha de portal estiver ativa (`usuario: admin`)
-
-Quando aberto em AP, a biblioteca sobe um AP de setup com captive portal (DNS catch-all) para abrir a pagina automaticamente apos conectar.
-
-Comportamento em AP:
-
-- URL principal recomendada: `http://192.168.4.1` (ou IP que o AP informar no serial).
-- `http://hostname.local` em AP depende de suporte mDNS do cliente/rede e pode nao resolver em todos os celulares/PCs.
-- A biblioteca responde endpoints de captive portal (`/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`, etc.) com redirecionamento para aumentar a chance de autoabertura.
-
-Diagnostico rapido quando nao abre automaticamente:
-
-- Ative debug (`debug-on`) e verifique no serial se aparecem logs `Captive probe: ...` apos conectar no AP.
-- Se nao houver probe, o cliente nao iniciou teste captive (comum por politica do SO/rede salva).
-- No Android, teste com `DNS Privado` em Automatico/Desligado.
-- Esqueca a rede AP no celular/PC e conecte novamente.
-- Acesso manual sempre funciona em `http://192.168.4.1`.
-
-Validar rapidamente se voce esta na pagina mais recente:
-
-- No rodape da pagina existe um carimbo `SuperOTA v... | ui-... | build ...`.
-- Esse carimbo ajuda a confirmar que o firmware novo subiu e que o navegador nao esta mostrando cache antigo.
-
-Se o PlatformIO usar cache de biblioteca local antiga:
+- `upload_protocol`, `upload_port` e `upload_flags` precisam ficar no nivel correto do `ini`;
+- se voce indentar isso errado, o PlatformIO pode tentar tratar essas linhas como `build_flags`;
+- se estiver usando a biblioteca local, force refresh quando necessario:
 
 ```powershell
-pio pkg install -d . -e <seu-env> --library "file://<caminho-absoluto-da-SuperOTA>" --force
+pio pkg install -d . -e <seu-env> --library "file://C:/caminho/para/SuperOTA" --force
 pio run -t clean
 pio run -t upload
 ```
 
-Sobre serial:
+## Uso com FreeRTOS
 
-- comandos (`configota`, `1`, `2`, etc.) podem ser enviados por:
-  - USB/COM no monitor serial, ou
-  - Telnet em `socket://hostname.local:23`
+Existem tres abordagens validas:
 
-Mapa rapido de portas:
+1. `ota.loop()` no `loop()` Arduino e tasks separadas para a aplicacao;
+2. task dedicada para `ota.loop()`;
+3. servico OTA com fila, onde uma task e a unica dona da biblioteca.
 
-- Portal web de configuracao: `http://hostname.local:80` (ou IP:80)
-- OTA (upload de firmware): porta `3232` (ArduinoOTA / espota)
-- Serial sem fio (Telnet): porta `23`
-- Serial USB local: COMx
+Recomendacao:
 
-## Seguranca OTA e portal
+- projeto simples: abordagem 2;
+- projeto mais robusto: abordagem 3.
 
-A biblioteca agora suporta dois niveis de senha:
+Regras para nao criar race condition:
 
-- senha OTA (upload de firmware na porta `3232`);
-- senha do portal de configuracao (HTTP Basic, usuario fixo `admin`).
+- nao deixe duas tasks chamando metodos da `SuperOTA` ao mesmo tempo;
+- se outra task precisar abrir portal, ligar debug ou imprimir status, envie um comando para a task dona;
+- nao tenha duas tasks consumindo `Serial` sem coordenacao.
 
-No portal voce pode escolher:
+O exemplo `FreeRTOSOtaServiceQueue` agora espelha o comportamento da biblioteca:
 
-- usar a mesma senha OTA para proteger o portal; ou
-- usar uma senha separada so para o portal.
+- `configota` em station abre escolha `1` / `2`;
+- `configota` em AP abre o portal no AP atual;
+- `portal-sta` abre direto no station;
+- `portal-ap` abre direto em AP;
+- `portal-stop` e `config-stop` fecham o portal.
 
-Comportamento dos campos de senha no portal:
+## Notas especificas do ESP32-P4
 
-- se deixar o campo vazio, a senha atual e mantida;
-- para trocar, informe a nova senha e clique em salvar.
+O P4 usa uma pilha de rede diferente quando combinado com ESP-Hosted/C6. Por isso a biblioteca tem um modo seguro especifico.
 
-API de seguranca:
+No P4:
 
-- `void setOtaPassword(const char* password)`
-- `bool otaPasswordEnabled() const`
-- `void setPortalPassword(const char* password)`
-- `void setUseOtaPasswordForPortal(bool enable)`
-- `bool usingOtaPasswordForPortal() const`
-- `bool portalPasswordEnabled() const`
+- retries extras em STA/AP podem ser necessarios;
+- `H_API: ESP-Hosted link not yet up` pode aparecer no boot antes da estabilizacao do C6;
+- mudancas de topologia feitas pelo portal podem exigir reinicio controlado;
+- mudancas apenas de seguranca agora sao reaplicadas sem reboot.
 
-Exemplo rapido (senha unica OTA + portal):
+Politica atual ao salvar no portal no P4:
 
-```cpp
-ota.setOtaPassword("TroquePorSenhaForte123!");
-ota.setUseOtaPasswordForPortal(true);
-```
+- se mudar apenas senha OTA/portal, a biblioteca reaplica sem reboot;
+- se mudar hostname, preferencia AP, AP SSID/senha ou lista station, a biblioteca agenda reinicio seguro.
 
-Exemplo rapido (senha separada para portal):
+## Troubleshooting
 
-```cpp
-ota.setOtaPassword("TroquePorSenhaForte123!");
-ota.setUseOtaPasswordForPortal(false);
-ota.setPortalPassword("OutraSenhaPortal456!");
-```
+### O Windows mostrou `SuperOTA-Recovery 2`
 
-Padrao recomendado ("ouro"):
+Isso normalmente e um rotulo do cliente Windows para uma rede ja conhecida, nao o SSID real transmitido pelo dispositivo. Confirme o SSID real no log serial da placa.
 
-1. usar senha forte no OTA (12+ caracteres aleatorios);
-2. manter o portal fechado na maior parte do tempo (abrir apenas sob comando);
-3. proteger o AP de configuracao com WPA2 quando possivel;
-4. usar rede confiavel para update (OTA e Basic Auth nao usam TLS por padrao);
-5. desativar Telnet em campo quando nao for necessario.
+### `http://hostname.local` nao abre
 
-## Modo debug de metricas
+`hostname.local` depende de mDNS no cliente. Em muitos cenarios o acesso correto e:
 
-Para ligar/desligar metricas detalhadas de AP/captive:
+- `http://hostname.local` quando o cliente suporta mDNS;
+- `http://<ip-station>` em station;
+- `http://192.168.4.1` em AP.
 
-- comando serial/Telnet `debug-on` -> ativa eventos e resumo periodico
-- comando serial/Telnet `debug-summary` -> imprime resumo na hora
-- comando serial/Telnet `debug-off` -> desativa debug
+### O portal nao abriu automaticamente
 
-Por codigo:
+Autoabertura de captive portal depende do sistema operacional. Acesse manualmente:
 
-```cpp
-ota.enableDebugMetrics(true);      // liga
-ota.setDebugSummaryIntervalMs(30000); // resumo automatico (padrao: 30s)
-ota.printDebugSummary();           // resumo manual
-```
+- `http://192.168.4.1` quando estiver em AP;
+- `http://hostname.local` ou `http://<ip-station>` quando estiver em station.
 
-Quando debug esta desligado, os logs verbosos de captive probe nao sao impressos.
+### O portal abriu em AP com SSID diferente do esperado
 
-No portal voce consegue editar:
+Se voce chamou `startConfigPortal()` sem argumentos, o comportamento atual e:
 
-- hostname
-- preferencia de inicializacao (priorizar AP)
-- AP SSID/senha
-- lista station (uma por linha em `SSID;senha`)
+- reutilizar o AP atual quando ja estiver em AP;
+- usar o AP operacional configurado (`setAccessPointCredentials`) quando abrir em AP a partir de station.
 
-Tambem existe endpoint de scan:
+Se aparecer outro SSID, o firmware em execucao provavelmente nao e o mais recente ou o projeto esta usando cache antigo da biblioteca.
 
-- `GET /scan` -> lista redes detectadas (SSID, RSSI, canal)
+### Falha de NVS
+
+Se o log mostrar `NVS indisponivel para leitura`, trate isso como falha de persistencia. Os exemplos oficiais atualizados passaram a rodar com defaults apenas em RAM nessa situacao, sem gravar por cima da configuracao salva.
 
 ## Exemplos
 
-### 1) AP-only
+### `BasicAccessPointOnly`
 
-Use [examples/BasicAccessPointOnly/BasicAccessPointOnly.ino](examples/BasicAccessPointOnly/BasicAccessPointOnly.ino)
+AP fixo com OTA e sem uso de station.
 
-### 2) Station + AP fallback
+### `BasicStationOrAP`
 
-Use [examples/BasicStationOrAP/BasicStationOrAP.ino](examples/BasicStationOrAP/BasicStationOrAP.ino)
+Fluxo basico de station com fallback para AP e persistencia segura.
 
-### 3) Lista station + portal serial
+### `StationListWithSerialConfig`
 
-Use [examples/StationListWithSerialConfig/StationListWithSerialConfig.ino](examples/StationListWithSerialConfig/StationListWithSerialConfig.ino)
+Lista de redes station priorizada + `configota` + debug opcional.
 
-Esse exemplo ja segue o padrao de persistencia segura:
+### `PersistenceWithFactoryReset`
 
-- carrega NVS primeiro;
-- grava defaults somente quando NVS estiver vazia.
+Mostra persistencia em NVS e inclui `nvs-clear` para reset de fabrica.
 
-### 4) Persistencia + reset de fabrica da NVS
+### `SecurityOtaAndPortalPassword`
 
-Use [examples/PersistenceWithFactoryReset/PersistenceWithFactoryReset.ino](examples/PersistenceWithFactoryReset/PersistenceWithFactoryReset.ino)
+Exemplo focado em senha OTA e protecao do portal.
 
-Comandos extras desse exemplo:
+### `FreeRTOSBasic`
 
-- `nvs-status` -> mostra estado basico salvo
-- `nvs-clear` -> limpa NVS e reinicia (simula reset de fabrica)
+Task dedicada para `ota.loop()` e task separada para aplicacao.
 
-### 5) FreeRTOS basico (task dedicada OTA)
+### `FreeRTOSOtaServiceQueue`
 
-Use [examples/FreeRTOSBasic/FreeRTOSBasic.ino](examples/FreeRTOSBasic/FreeRTOSBasic.ino)
+Servico OTA com fila, ownership unico da biblioteca e console espelhando o fluxo oficial do `configota`.
 
-Esse exemplo mostra:
+### `GuidedSetupP4`
 
-- task dedicada para `ota.loop()`;
-- task separada de aplicacao;
-- uso de `configota` mantendo arquitetura simples com SO.
+Exemplo novo, mais detalhado, pensado primeiro para ESP32-P4.
 
-### 6) FreeRTOS com servico OTA + fila (producao)
+Arquivos relevantes:
 
-Use [examples/FreeRTOSOtaServiceQueue/FreeRTOSOtaServiceQueue.ino](examples/FreeRTOSOtaServiceQueue/FreeRTOSOtaServiceQueue.ino)
-
-Esse exemplo mostra:
-
-- task OTA como servico unico (ownership da biblioteca);
-- task de console enviando comandos por fila;
-- comandos: `portal-ap`, `portal-stop`, `debug-on`, `debug-off`, `debug-summary`, `status`.
-
-### 7) Seguranca OTA + senha no portal
-
-Use [examples/SecurityOtaAndPortalPassword/SecurityOtaAndPortalPassword.ino](examples/SecurityOtaAndPortalPassword/SecurityOtaAndPortalPassword.ino)
-
-Esse exemplo mostra:
-
-- senha obrigatoria para upload OTA;
-- portal protegido por senha (`admin` + senha);
-- duas estrategias: senha unica (OTA + portal) ou senha separada;
-- persistencia dessas configuracoes na NVS.
+- `examples/GuidedSetupP4/GuidedSetupP4.ino`
+- `examples/GuidedSetupP4/README.md`
 
 ## API publica
 
 ### Configuracao
 
-- `void beginSerial(uint32_t baud = 115200)`
-- `void setStationCredentials(const char* ssid, const char* password = nullptr)`
-- `bool addStationNetwork(const char* ssid, const char* password = nullptr)`
-- `void clearStationNetworks()`
-- `uint8_t stationNetworkCount() const`
-- `void setAccessPointCredentials(const char* ssid, const char* password = nullptr)`
-- `void setHostname(const char* hostname)`
-- `void setPreferAccessPoint(bool prefer)`
-- `void setStationConnectTimeoutMs(uint32_t timeoutMs)`
-- `void setSafeP4Mode(bool enable)`
-- `bool safeP4Mode() const`
-- `bool isP4Target() const`
-- `void enableDebugMetrics(bool enable = true)`
-- `bool debugMetricsEnabled() const`
-- `void setDebugSummaryIntervalMs(uint32_t intervalMs)`
-- `uint32_t debugSummaryIntervalMs() const`
-- `void printDebugSummary()`
+- `beginSerial(uint32_t baud = 115200)`
+- `setStationCredentials(const char* ssid, const char* password = nullptr)`
+- `addStationNetwork(const char* ssid, const char* password = nullptr)`
+- `clearStationNetworks()`
+- `stationNetworkCount() const`
+- `setAccessPointCredentials(const char* ssid, const char* password = nullptr)`
+- `setHostname(const char* hostname)`
+- `hostname() const`
+- `accessPointSsid() const`
+- `accessPointPasswordEnabled() const`
+- `setPreferAccessPoint(bool prefer)`
+- `setStationConnectTimeoutMs(uint32_t timeoutMs)`
+- `setSafeP4Mode(bool enable)`
+- `safeP4Mode() const`
+- `isP4Target() const`
 
-### Portal / serial
+### OTA, portal e debug
 
-- `void enableTelnetSerial(bool enable, uint16_t port = 23)`
-- `bool telnetSerialEnabled() const`
-- `uint16_t telnetPort() const`
-- `bool telnetClientConnected()`
-- `void setOtaPassword(const char* password)`
-- `bool otaPasswordEnabled() const`
-- `void setPortalPassword(const char* password)`
-- `void setUseOtaPasswordForPortal(bool enable)`
-- `bool usingOtaPasswordForPortal() const`
-- `bool portalPasswordEnabled() const`
-- `void enableSerialConfigCommand(bool enable = true, const char* command = "configota")`
-- `bool startConfigPortal(const char* apSsid = nullptr, const char* apPassword = nullptr)`
-- `void stopConfigPortal(bool resumeAuto = true)`
-- `bool configPortalRunning() const`
+- `enableTelnetSerial(bool enable, uint16_t port = 23)`
+- `telnetSerialEnabled() const`
+- `telnetPort() const`
+- `telnetClientConnected()`
+- `setOtaPassword(const char* password)`
+- `otaPasswordEnabled() const`
+- `setPortalPassword(const char* password)`
+- `setUseOtaPasswordForPortal(bool enable)`
+- `usingOtaPasswordForPortal() const`
+- `portalPasswordEnabled() const`
+- `enableSerialConfigCommand(bool enable = true, const char* command = "configota")`
+- `startConfigPortal(const char* apSsid = nullptr, const char* apPassword = nullptr)`
+- `startConfigPortalOnStation()`
+- `stopConfigPortal(bool resumeAuto = true)`
+- `configPortalRunning() const`
+- `enableDebugMetrics(bool enable = true)`
+- `debugMetricsEnabled() const`
+- `setDebugSummaryIntervalMs(uint32_t intervalMs)`
+- `debugSummaryIntervalMs() const`
+- `printDebugSummary()`
 
-### Inicializacao OTA
+### Inicializacao e estado
 
-- `bool begin()`
-- `bool beginStation(const char* ssid, const char* password = nullptr)`
-- `bool beginAccessPoint(const char* ssid = nullptr, const char* password = nullptr)`
-- `void loop()`
+- `begin()`
+- `beginStation(const char* ssid, const char* password = nullptr)`
+- `beginAccessPoint(const char* ssid = nullptr, const char* password = nullptr)`
+- `loop()`
+- `enable(bool enable)`
+- `enabled() const`
+- `isConfigured() const`
+- `isStationMode() const`
+- `hasStationCredentials() const`
+- `ip() const`
 
-### Estado
+### Persistencia
 
-- `void enable(bool enable)`
-- `bool enabled() const`
-- `bool isConfigured() const`
-- `bool isStationMode() const`
-- `bool hasStationCredentials() const`
-- `IPAddress ip() const`
-
-### Persistencia (NVS)
-
-- `bool loadPreferences()`
-- `bool savePreferences()`
-- `bool clearPreferences()`
-
-Namespace NVS: `superota`
-
-Chaves:
-
-- `preferAP`
-- `staSsid` / `staPass` (compatibilidade)
-- `staList` (lista station)
-- `apSsid`
-- `apPass`
-- `hostname`
-- `otaPass`
-- `portalPass`
-- `portalUseOta`
-
-## Modo seguro P4 + C6
-
-No build ESP32-P4, o modo seguro e ligado por padrao:
-
-- retries extras em STA/AP;
-- atraso curto para estabilizacao de link;
-- mDNS nao bloqueia o OTA em caso de falha.
-
-Em outros targets, esse modo nao altera o comportamento padrao.
+- `loadPreferences()`
+- `savePreferences()`
+- `clearPreferences()`
 
 ## Boas praticas
 
-- Sempre chame `ota.loop()` no loop principal.
-- Mantenha AP senha com 8+ caracteres (ou vazio para aberto).
-- Defina prioridade das redes station na ordem de insercao.
-- Use `savePreferences()` apos alterar configuracoes no codigo.
-- Para producao, ative senha OTA e senha no portal.
+- chame `loadPreferences()` antes de aplicar defaults;
+- grave defaults apenas quando a NVS estiver acessivel e vazia;
+- mantenha `ota.loop()` sendo executado continuamente;
+- trate `configota` como fluxo operacional principal, nao como ajuste de excecao;
+- em FreeRTOS, defina ownership claro da biblioteca;
+- em P4, prefira manter `safeP4Mode` ligado;
+- use senha OTA em qualquer uso fora de bancada.
 
 ## Licenca
 
-MIT. Veja o arquivo `LICENSE`.
+MIT. Veja `LICENSE`.

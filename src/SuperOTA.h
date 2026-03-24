@@ -45,9 +45,13 @@ public:
   void setUseOtaPasswordForPortal(bool enable);
   bool usingOtaPasswordForPortal() const;
   bool portalPasswordEnabled() const;
+  String hostname() const;
+  String accessPointSsid() const;
+  bool accessPointPasswordEnabled() const;
 
   void enableSerialConfigCommand(bool enable = true, const char* command = "configota");
   bool startConfigPortal(const char* apSsid = nullptr, const char* apPassword = nullptr);
+  bool startConfigPortalOnStation();
   void stopConfigPortal(bool resumeAuto = true);
   bool configPortalRunning() const;
 
@@ -108,7 +112,6 @@ private:
   static constexpr const char* kDefaultApSsid = "Baratinha-OTA";
   static constexpr const char* kDefaultApPassword = "12345678";
   static constexpr const char* kDefaultHostname = "baratinha";
-  static constexpr const char* kDefaultConfigApSsid = "SuperOTA-Setup";
   static constexpr const char* kPrefsNamespace = "superota";
 
   bool configureAuto();
@@ -127,7 +130,6 @@ private:
   void startTelnetServer(uint16_t port);
   void stopTelnetServer();
   void processCommandLine(const String& command);
-  bool startConfigPortalOnStation();
   bool startConfigPortalOnAccessPoint(const char* apSsid, const char* apPassword);
   bool ensurePortalAuthentication();
   String effectivePortalPassword() const;
@@ -140,6 +142,7 @@ private:
   void handleConfigScan();
 
   void stationListToMultiline(String& out) const;
+  String normalizeStationListInput(const String& rawList) const;
   void parseAndSetStationList(const String& rawList);
   void resetDebugMetrics();
   void handleDebugWifiEvent(arduino_event_id_t event, arduino_event_info_t info);

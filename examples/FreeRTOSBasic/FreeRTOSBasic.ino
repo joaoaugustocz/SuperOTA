@@ -37,10 +37,19 @@ void setup() {
   ota.enableSerialConfigCommand(true, "configota");
 
   // Carrega configuracao persistida.
-  ota.loadPreferences();
+  const bool prefsLoaded = ota.loadPreferences();
 
-  // Defaults apenas no primeiro boot (NVS vazia).
-  if (!ota.hasStationCredentials()) {
+  // Defaults apenas no primeiro boot com NVS valida.
+  if (!prefsLoaded) {
+    Serial.println("[APP] Aviso: NVS indisponivel. Rodando com defaults apenas em RAM.");
+    ota.setHostname("superota-freertos-basic");
+    ota.setPreferAccessPoint(false);
+    ota.setAccessPointCredentials("SuperOTA-Recovery", "12345678");
+
+    ota.clearStationNetworks();
+    ota.addStationNetwork("MinhaRede", "MinhaSenha");
+    ota.addStationNetwork("MinhaRedeBackup", "MinhaSenhaBackup");
+  } else if (!ota.hasStationCredentials()) {
     ota.setHostname("superota-freertos-basic");
     ota.setPreferAccessPoint(false);
     ota.setAccessPointCredentials("SuperOTA-Recovery", "12345678");
@@ -51,6 +60,8 @@ void setup() {
     ota.savePreferences();
 
     Serial.println("[APP] Perfil inicial salvo na NVS.");
+  } else {
+    Serial.println("[APP] Perfil carregado da NVS.");
   }
 
   if (!ota.begin()) {
@@ -72,6 +83,7 @@ void setup() {
 
   Serial.println("[APP] FreeRTOS Basic pronto.");
   Serial.println("[APP] Comando serial: configota");
+  Serial.println("[APP] Em station, 'configota' pergunta 1=station / 2=AP.");
   Serial.println("[APP] Regra de ouro: deixe ota.loop() em task dedicada.");
 }
 

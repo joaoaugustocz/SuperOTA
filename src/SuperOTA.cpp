@@ -27,7 +27,7 @@ constexpr uint16_t kSafeP4LinkStabilizeDelayMs = 120;
 constexpr uint16_t kConfigPortalPort = 80;
 constexpr uint16_t kConfigPortalDeferredStopMs = 1200;
 constexpr char kSuperOtaVersion[] = "1.2.1";
-constexpr char kConfigUiRevision[] = "ui-2026-03-21-eye-minimal-v1";
+constexpr char kConfigUiRevision[] = "ui-2026-03-23-portal-flow-v1";
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
 constexpr bool kBuildTargetIsP4 = true;
@@ -547,6 +547,18 @@ bool SuperOTA::portalPasswordEnabled() const {
   return effectivePortalPassword().length() > 0;
 }
 
+String SuperOTA::hostname() const {
+  return _hostname;
+}
+
+String SuperOTA::accessPointSsid() const {
+  return _apSsid;
+}
+
+bool SuperOTA::accessPointPasswordEnabled() const {
+  return _apPassword.length() > 0;
+}
+
 void SuperOTA::enableSerialConfigCommand(bool enable, const char* command) {
   _serialConfigEnabled = enable;
 
@@ -654,15 +666,16 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
     return true;
   }
 
-  const bool defaultSsidRequested = (apSsid == nullptr || apSsid[0] == '\0');
-  String configSsid = defaultSsidRequested ? String(kDefaultConfigApSsid) : String(apSsid);
-  if (defaultSsidRequested) {
-    const uint32_t token = esp_random() & 0xFFFFU;
-    char suffix[8];
-    snprintf(suffix, sizeof(suffix), "-%04X", static_cast<unsigned>(token));
-    configSsid += suffix;
+  const bool explicitSsidProvided = (apSsid != nullptr && apSsid[0] != '\0');
+  const bool explicitPasswordProvided = (apPassword != nullptr);
+  const bool usingConfiguredOperationalAp = !explicitSsidProvided && !explicitPasswordProvided;
+
+  String configSsid = explicitSsidProvided ? String(apSsid) : _apSsid;
+  if (configSsid.isEmpty()) {
+    configSsid = kDefaultApSsid;
   }
-  String configPass = (apPassword != nullptr) ? apPassword : "";
+
+  String configPass = explicitPasswordProvided ? String(apPassword) : _apPassword;
   if (configPass.length() > 0 && configPass.length() < 8) {
     Serial.println(F("[SuperOTA] Senha de portal invalida (<8). Abrindo portal sem senha."));
     configPass = "";
@@ -676,8 +689,7 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
   IPAddress currentApIp;
 
   bool reuseCurrentAp = false;
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-  if (defaultSsidRequested && _configured && !_stationMode) {
+  if (usingConfiguredOperationalAp && _configured && !_stationMode) {
     const String activeSsid = WiFi.softAPSSID();
     const IPAddress activeIp = WiFi.softAPIP();
     if (activeSsid.length() > 0 && hasValidIp(activeIp)) {
@@ -688,7 +700,6 @@ bool SuperOTA::startConfigPortalOnAccessPoint(const char* apSsid, const char* ap
       Serial.println(configSsid);
     }
   }
-#endif
 
   if (!reuseCurrentAp) {
     _configured = false;
@@ -979,6 +990,7 @@ void SuperOTA::handleDeferredPortalStop() {
     return;
   }
 
+  println(F("[SuperOTA] Aplicando configuracoes reconfigurando sem reboot."));
   stopConfigPortal(resumeAuto);
 }
 
@@ -2034,6 +2046,13 @@ void SuperOTA::handleConfigSave() {
     return;
   }
 
+  const String previousHostname = _hostname;
+  const bool previousPreferAccessPoint = _preferAccessPoint;
+  const String previousApSsid = _apSsid;
+  const String previousApPassword = _apPassword;
+  String previousStationList;
+  stationListToMultiline(previousStationList);
+
   const String hostname = _configServer->arg("hostname");
   const String apSsid = _configServer->arg("apSsid");
   const String apPassword = _configServer->arg("apPassword");
@@ -2043,6 +2062,7 @@ void SuperOTA::handleConfigSave() {
   const String portalPassword = _configServer->arg("portalPassword");
   const bool portalUseOtaRequested = _configServer->hasArg("portalUseOta");
   const String stationList = _configServer->arg("stationList");
+  const String normalizedStationList = normalizeStationListInput(stationList);
   bool securityChanged = false;
 
   setHostname(hostname.c_str());
@@ -2079,7 +2099,11 @@ void SuperOTA::handleConfigSave() {
     }
   }
 
-  parseAndSetStationList(stationList);
+  parseAndSetStationList(normalizedStationList);
+
+  const bool topologyChanged =
+      previousHostname != _hostname || previousPreferAccessPoint != _preferAccessPoint || previousApSsid != _apSsid ||
+      previousApPassword != _apPassword || previousStationList != normalizedStationList;
 
   savePreferences();
 
@@ -2103,8 +2127,16 @@ void SuperOTA::handleConfigSave() {
   _configServer->send(200, "text/html", response);
   _deferredPortalResumeAuto = true;
   _deferredPortalStopAfterMs = millis() + kConfigPortalDeferredStopMs;
-  _deferredPortalRestart = securityChanged || (_safeP4Mode && kBuildTargetIsP4);
+  _deferredPortalRestart = topologyChanged && (_safeP4Mode && kBuildTargetIsP4);
   _deferredPortalStop = true;
+
+  if (_deferredPortalRestart) {
+    println(F("[SuperOTA] Mudancas de topologia detectadas. Portal sera aplicado com reinicio seguro."));
+  } else if (securityChanged) {
+    println(F("[SuperOTA] Mudancas de seguranca detectadas. Portal sera reaplicado sem reboot."));
+  } else {
+    println(F("[SuperOTA] Mudancas aplicadas sem necessidade de reboot."));
+  }
 }
 
 void SuperOTA::handleConfigScan() {
@@ -2150,6 +2182,71 @@ void SuperOTA::stationListToMultiline(String& out) const {
     out += _stationPasswords[i];
     out += '\n';
   }
+}
+
+String SuperOTA::normalizeStationListInput(const String& rawList) const {
+  String tempSsids[kMaxStationNetworks];
+  String tempPasswords[kMaxStationNetworks];
+  uint8_t tempCount = 0;
+
+  int start = 0;
+  while (start <= rawList.length()) {
+    int end = rawList.indexOf('\n', start);
+    if (end < 0) {
+      end = rawList.length();
+    }
+
+    String line = rawList.substring(start, end);
+    line.trim();
+
+    if (!line.isEmpty()) {
+      int sep = line.indexOf(';');
+      if (sep < 0) {
+        sep = line.indexOf('\t');
+      }
+
+      String ssid;
+      String pass;
+      if (sep >= 0) {
+        ssid = line.substring(0, sep);
+        pass = line.substring(sep + 1);
+      } else {
+        ssid = line;
+      }
+
+      ssid.trim();
+      pass.trim();
+
+      if (!ssid.isEmpty()) {
+        bool updated = false;
+        for (uint8_t i = 0; i < tempCount; ++i) {
+          if (tempSsids[i] == ssid) {
+            tempPasswords[i] = pass;
+            updated = true;
+            break;
+          }
+        }
+
+        if (!updated && tempCount < kMaxStationNetworks) {
+          tempSsids[tempCount] = ssid;
+          tempPasswords[tempCount] = pass;
+          ++tempCount;
+        }
+      }
+    }
+
+    start = end + 1;
+  }
+
+  String normalized;
+  for (uint8_t i = 0; i < tempCount; ++i) {
+    normalized += tempSsids[i];
+    normalized += ';';
+    normalized += tempPasswords[i];
+    normalized += '\n';
+  }
+
+  return normalized;
 }
 
 void SuperOTA::parseAndSetStationList(const String& rawList) {

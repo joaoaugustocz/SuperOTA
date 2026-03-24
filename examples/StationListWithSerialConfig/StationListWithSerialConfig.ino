@@ -8,10 +8,20 @@ void setup() {
 
   // 1) Sempre tente carregar o perfil salvo antes de aplicar defaults.
   // Se voce configurou redes pelo portal (configota), elas estarao na NVS.
-  ota.loadPreferences();
+  const bool prefsLoaded = ota.loadPreferences();
 
-  // 2) So define valores de fabrica no primeiro boot (ou quando NVS estiver vazia).
-  if (!ota.hasStationCredentials()) {
+  // 2) So define valores de fabrica no primeiro boot com NVS acessivel.
+  if (!prefsLoaded) {
+    Serial.println("[APP] Aviso: NVS indisponivel. Usando defaults apenas em RAM.");
+    ota.setHostname("superota-smart-sta");
+    ota.setPreferAccessPoint(false);
+    ota.setAccessPointCredentials("SuperOTA-Recovery", "12345678");
+
+    ota.clearStationNetworks();
+    ota.addStationNetwork("WiFi-Casa", "senha-casa");
+    ota.addStationNetwork("WiFi-Escritorio", "senha-escritorio");
+    ota.addStationNetwork("WiFi-Backup", "senha-backup");
+  } else if (!ota.hasStationCredentials()) {
     ota.setHostname("superota-smart-sta");
     ota.setPreferAccessPoint(false);
     ota.setAccessPointCredentials("SuperOTA-Recovery", "12345678");
@@ -37,6 +47,7 @@ void setup() {
   }
 
   Serial.println("[APP] Digite 'configota' no serial para abrir portal web.");
+  Serial.println("[APP] Em station, 'configota' pergunta 1=station / 2=AP.");
   Serial.println("[APP] O que salvar no portal permanece apos reboot e OTA.");
   Serial.println("[APP] Debug opcional: debug-on, debug-summary, debug-off.");
 }
